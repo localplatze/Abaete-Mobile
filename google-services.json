@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "321869961979",
+    "firebase_url": "https://amapa-e9328-default-rtdb.firebaseio.com",
+    "project_id": "amapa-e9328",
+    "storage_bucket": "amapa-e9328.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:321869961979:android:08dffd4886bd3b69b32e5e",
+        "android_client_info": {
+          "package_name": "com.wellsystemsdev.amapa"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBUiFU70iMyQXA_YW7hA8RRe9U_QTGpsrE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
