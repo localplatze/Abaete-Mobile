@@ -11,6 +11,8 @@ import { ProfHomeScreen } from './src/screens/ProfHomeScreen';
 import { AdminHomeScreen } from './src/screens/AdminHomeScreen';
 import { ProgramEditorScreen } from './src/screens/ProgramEditorScreen';
 import { NewAbaScreen } from './src/screens/NewAbaScreen';
+import { CalendarScreen } from './src/screens/CalendarScreen';
+import { PatientDetailScreen } from './src/screens/PatientDetailScreen';
 
 const Stack = createStackNavigator();
 
@@ -46,6 +48,8 @@ export default function App() {
         <Stack.Screen name="AdminHome" component={AdminHomeScreen} />
         <Stack.Screen name="ProgramEditor" component={ProgramEditorScreen} />
         <Stack.Screen name="NewAba" component={NewAbaScreen} />
+        <Stack.Screen name="Calendar" component={CalendarScreen} />
+        <Stack.Screen name="PatientDetail" component={PatientDetailScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

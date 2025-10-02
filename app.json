@@ -1,25 +1,19 @@
 {
   "expo": {
-    "platforms": ["ios", "android", "web"],
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
     "name": "Instituto Abaeté",
     "slug": "abaete",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/abaete_logo.png",
     "userInterfaceStyle": "light",
-    "plugins": [
-      [
-        "expo-notifications",
-        {
-          "icon": "./assets/icon.png",
-          "color": "#ffffff"
-        }
-      ],
-      "expo-font"
-    ],
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/abaete_logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -36,17 +30,15 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.platze.abaete",
-      "googleServicesFile": "./google-services.json",
-      "useNextNotificationsApi": true
+      "package": "com.platze.abaete"
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/abaete_logo.png",
       "bundler": "metro"
     },
     "extra": {
       "eas": {
-        "projectId": "eebd2dd0-b080-4439-88c1-2c3b5f113f11"
+        "projectId": "1a371d62-dcd9-46a6-a32d-89c03a09f65d"
       }
     }
   }
