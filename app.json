@@ -33,8 +33,7 @@
       "package": "com.platze.abaete"
     },
     "web": {
-      "favicon": "./assets/abaete_logo.png",
-      "bundler": "metro"
+      "favicon": "./assets/abaete_logo.png"
     },
     "extra": {
       "eas": {
