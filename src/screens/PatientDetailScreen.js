@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, 
-    Image, ActivityIndicator, FlatList, TextInput, Keyboard
+    Image, ActivityIndicator, FlatList, TextInput, Keyboard, Modal
 } from 'react-native';
 import { ref, onValue, query, orderByChild, firebaseSet, push, 
     get, remove, equalTo
@@ -13,6 +13,8 @@ import { FONT_FAMILY } from '../constants/Fonts';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { LineChart } from "react-native-gifted-charts";
+import { Picker } from '@react-native-picker/picker';
+import { Video } from 'expo-av';
 
 // Componentes para cada Aba
 const OverviewTab = ({ patient }) => {
@@ -131,14 +133,96 @@ const ProgressItem = ({ program, progress, navigation }) => {
     );
 };
 
+const PHASE_ORDER = ['baseline', 'intervention', 'maintenance', 'generalization'];
+const PHASE_TRANSLATIONS = {
+    baseline: 'Linha de Base', intervention: 'Intervenção',
+    maintenance: 'Manutenção', generalization: 'Generalização'
+};
+const PHASE_COLORS = {
+    baseline: { bg: 'rgba(254, 226, 226, 0.7)', border: '#F87171' },
+    intervention: { bg: 'rgba(254, 249, 195, 0.7)', border: '#FBBF24' },
+    maintenance: { bg: 'rgba(221, 237, 254, 0.7)', border: '#367BF5' },
+    generalization: { bg: 'rgba(222, 247, 236, 0.7)', border: '#34D399' }
+};
+
+const ProgressChart = ({ chartData, programConfig }) => {
+    if (chartData.length < 2) {
+        return <View style={styles.emptyChartContainer}><Text style={styles.emptyTabText}>Dados insuficientes para gerar o gráfico.</Text></View>;
+    }
+
+    const chartProps = useMemo(() => {
+        const sections = [];
+        const verticalLines = [];
+        const labels = chartData.map(d => d.label);
+        const specialLabelIndices = {};
+
+        let lastPhase = null;
+        let startIndex = 0;
+
+        chartData.forEach((point, index) => {
+            if (point.phase !== lastPhase) {
+                if (lastPhase !== null) {
+                    // Adiciona seção de fundo
+                    sections.push({ color: PHASE_COLORS[lastPhase]?.bg || 'transparent', startValue: startIndex, endValue: index - 1 });
+                    // Adiciona linha divisória
+                    verticalLines.push({ index: index -1, color: ABAETE_COLORS.lightGray, dash: [5, 5] });
+                }
+                // Calcula o meio do bloco da fase anterior para o rótulo
+                const middleIndex = startIndex + Math.floor((index - 1 - startIndex) / 2);
+                if (lastPhase) specialLabelIndices[middleIndex] = PHASE_TRANSLATIONS[lastPhase];
+                
+                startIndex = index;
+                lastPhase = point.phase;
+            }
+        });
+        // Adiciona a última seção e rótulo
+        sections.push({ color: PHASE_COLORS[lastPhase]?.bg || 'transparent', startValue: startIndex, endValue: chartData.length - 1 });
+        const lastMiddleIndex = startIndex + Math.floor((chartData.length - 1 - startIndex) / 2);
+        if (lastPhase) specialLabelIndices[lastMiddleIndex] = PHASE_TRANSLATIONS[lastPhase];
+
+        return { sections, verticalLines, labels, specialLabelIndices };
+    }, [chartData]);
+    
+    return (
+        <LineChart
+            data={chartData}
+            height={220} color={ABAETE_COLORS.primaryBlue} thickness={3} curved
+            spacing={60} initialSpacing={20}
+            // Eixos
+            yAxisLabelSuffix="%" yAxisTextStyle={{ color: ABAETE_COLORS.textSecondary }}
+            yAxisOffset={0} maxValue={100} noOfSections={5}
+            // Rótulos do Eixo X customizados
+            xAxisLabelComponent={(index) => (
+                <View style={{ width: 60, marginLeft: index === 0 ? -15 : 0 }}>
+                    <Text style={{ color: ABAETE_COLORS.textSecondary, textAlign: 'center' }}>{chartProps.labels[index]}</Text>
+                    {chartProps.specialLabelIndices[index] && (
+                        <Text style={{ color: ABAETE_COLORS.primaryBlue, textAlign: 'center', fontSize: 12, fontFamily: FONT_FAMILY.SemiBold, marginTop: 4 }}>
+                            {chartProps.specialLabelIndices[index]}
+                        </Text>
+                    )}
+                </View>
+            )}
+            xAxisLabelsHeight={40} // Aumenta a altura para caber o nome da fase
+            // Fundo e Divisórias
+            rulesColor={ABAETE_COLORS.lightGray} showXAxisIndices={false}
+            sections={chartProps.sections}
+            verticalLines={chartProps.verticalLines}
+            // Pontos
+            dataPointsColor={ABAETE_COLORS.primaryBlue}
+        />
+    );
+};
+
 const ProgressTab = ({ patient }) => {
     const [allSessions, setAllSessions] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [selectedProgramId, setSelectedProgramId] = useState('all');
-
+    const [selectedProgramId, setSelectedProgramId] = useState('');
     const availablePrograms = patient.assignedPrograms ? Object.values(patient.assignedPrograms) : [];
 
     useEffect(() => {
+        if (availablePrograms.length > 0 && !selectedProgramId) {
+            setSelectedProgramId(availablePrograms[0].id);
+        }
         const appointmentsRef = query(ref(FIREBASE_DB, 'appointments'), orderByChild('patientId'), equalTo(patient.id));
         const unsubscribe = onValue(appointmentsRef, (snapshot) => {
             const completedSessions = [];
@@ -152,37 +236,61 @@ const ProgressTab = ({ patient }) => {
             setLoading(false);
         });
         return () => unsubscribe();
-    }, [patient.id]);
+    }, [patient.id, availablePrograms]);
 
-    const filteredSessions = selectedProgramId === 'all' 
-        ? allSessions 
-        : allSessions.filter(session => session.abaData.programId === selectedProgramId);
+    const programConfig = patient.assignedPrograms?.[selectedProgramId];
+    const filteredSessions = allSessions.filter(session => session.abaData.programId === selectedProgramId);
 
-    const chartData = filteredSessions.map(session => ({
+    const generalChartData = filteredSessions.map(session => ({
         value: session.abaData.accuracy,
-        label: new Date(session.dateTimeStart).toLocaleDateString('pt-BR', { day: 'numeric', month: 'numeric' }),
+        label: new Date(session.dateTimeStart).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+        phase: session.abaData.phaseConducted,
     }));
 
     if (loading) return <ActivityIndicator style={{ marginTop: 40 }} size="large" color={ABAETE_COLORS.primaryBlue} />;
+    if (availablePrograms.length === 0) return <View style={styles.tabContent}><Text style={styles.emptyTabText}>Nenhum programa atribuído a este paciente.</Text></View>;
 
     return (
-        <View style={styles.tabContent}>
-            <Text style={styles.sectionTitle}>Filtrar Progresso por Programa</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterContainer}>
-                <TouchableOpacity style={[styles.filterChip, selectedProgramId === 'all' && styles.filterChipActive]} onPress={() => setSelectedProgramId('all')}><Text style={[styles.filterChipText, selectedProgramId === 'all' && styles.filterChipTextActive]}>Todos</Text></TouchableOpacity>
-                {availablePrograms.map(prog => (
-                    <TouchableOpacity key={prog.templateId} style={[styles.filterChip, selectedProgramId === prog.templateId && styles.filterChipActive]} onPress={() => setSelectedProgramId(prog.templateId)}><Text style={[styles.filterChipText, selectedProgramId === prog.templateId && styles.filterChipTextActive]}>{prog.name}</Text></TouchableOpacity>
-                ))}
-            </ScrollView>
-
-            <View style={styles.chartContainer}>
-                {chartData.length > 1 ? (
-                    <LineChart data={chartData} height={220} color={ABAETE_COLORS.primaryBlue} thickness={3} yAxisLabelSuffix="%" yAxisTextStyle={{ color: ABAETE_COLORS.textSecondary }} xAxisLabelTextStyle={{ color: ABAETE_COLORS.textSecondary }} startFillColor={ABAETE_COLORS.primaryBlue} endFillColor={ABAETE_COLORS.primaryBlueLight} areaChart curved spacing={50} initialSpacing={20} dataPointsColor={ABAETE_COLORS.primaryBlue}/>
-                ) : (
-                    <View style={styles.emptyChartContainer}><MaterialIcons name="insights" size={48} color={ABAETE_COLORS.lightGray} /><Text style={styles.emptyTabText}>{chartData.length <= 1 ? "Dados insuficientes para gerar gráfico." : "Selecione um programa."}</Text></View>
-                )}
+        <ScrollView style={styles.tabContent}>
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Analisar Programa</Text>
+                <View style={styles.pickerContainer}>
+                    <Picker selectedValue={selectedProgramId} onValueChange={(itemValue) => setSelectedProgramId(itemValue)}>
+                        {availablePrograms.map(prog => <Picker.Item key={prog.id} label={prog.name} value={prog.id} />)}
+                    </Picker>
+                </View>
             </View>
-        </View>
+
+            <View style={styles.chartSection}>
+                <Text style={styles.sectionTitle}>Progresso Geral do Programa</Text>
+                <View style={styles.chartContainer}>
+                    <ProgressChart chartData={generalChartData} programConfig={programConfig} />
+                </View>
+            </View>
+
+            {programConfig?.targets?.map(targetName => {
+                const targetChartData = filteredSessions.map(session => {
+                    const trial = session.abaData.trialsData.find(t => t.target === targetName);
+                    if (!trial?.attempts?.length) return null;
+                    const correct = trial.attempts.filter(a => a.score === 1).length;
+                    const accuracy = (correct / trial.attempts.length) * 100;
+                    return {
+                        value: accuracy,
+                        label: new Date(session.dateTimeStart).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+                        phase: session.abaData.phaseConducted,
+                    };
+                }).filter(Boolean);
+
+                return (
+                    <View key={targetName} style={styles.chartSection}>
+                        <Text style={styles.sectionTitle}>{`Progresso do Alvo: "${targetName}"`}</Text>
+                        <View style={styles.chartContainer}>
+                            <ProgressChart chartData={targetChartData} programConfig={programConfig} />
+                        </View>
+                    </View>
+                );
+            })}
+        </ScrollView>
     );
 };
 
@@ -243,6 +351,8 @@ const PostItem = ({ post }) => {
     const [commentsVisible, setCommentsVisible] = useState(false);
     const [comments, setComments] = useState([]);
     const [commentText, setCommentText] = useState('');
+    const [isImageModalVisible, setImageModalVisible] = useState(false);
+    const [selectedImageUri, setSelectedImageUri] = useState(null);
     
     // useEffect para buscar o autor (permanece igual)
     useEffect(() => {
@@ -277,6 +387,11 @@ const PostItem = ({ post }) => {
         }
     }, [commentsVisible, post.id, post.patientId]);
 
+    const openImageModal = (uri) => {
+        setSelectedImageUri(uri);
+        setImageModalVisible(true);
+    };
+
     const handleToggleLike = async () => {
         const currentUserId = FIREBASE_AUTH.currentUser?.uid;
         if (!currentUserId) return;
@@ -298,9 +413,7 @@ const PostItem = ({ post }) => {
         Keyboard.dismiss();
     };
 
-    if (!author) {
-        return <View style={[styles.postCard, { height: 120, justifyContent: 'center', alignItems: 'center' }]}><ActivityIndicator color={ABAETE_COLORS.primaryBlue} /></View>;
-    }
+    if (!author) { return <View style={[styles.postCard, { height: 120 }]}><ActivityIndicator /></View>; }
 
     const authorName = author.displayName || author.fullName || 'Usuário';
     const likesCount = post.likes ? Object.keys(post.likes).length : 0;
@@ -309,15 +422,26 @@ const PostItem = ({ post }) => {
 
     return (
         <View style={styles.postCard}>
-            {/* O header e o conteúdo do post permanecem os mesmos */}
             <View style={styles.postHeader}>
                 <Image source={{ uri: author.profilePicture || `https://ui-avatars.com/api/?name=${authorName.replace(' ', '+')}` }} style={styles.postAvatar} />
-                <View>
-                    <Text style={styles.postAuthorName}>{authorName}</Text>
-                    <Text style={styles.postTimestamp}>{timeAgo(post.createdAt)}</Text>
-                </View>
+                <View><Text style={styles.postAuthorName}>{authorName}</Text><Text style={styles.postTimestamp}>{timeAgo(post.createdAt)}</Text></View>
             </View>
             <Text style={styles.postText}>{post.text}</Text>
+
+            {/* SEÇÃO DE MÍDIA ADICIONADA */}
+            {post.media && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.postMediaContainer}>
+                    {Object.values(post.media).map((mediaFile, index) => (
+                        <TouchableOpacity key={index} onPress={() => mediaFile.type === 'image' && openImageModal(mediaFile.url)}>
+                            {mediaFile.type === 'image' ? (
+                                <Image source={{ uri: mediaFile.url }} style={styles.mediaItem} />
+                            ) : mediaFile.type === 'video' ? (
+                                <Video source={{ uri: mediaFile.url }} style={styles.mediaItem} useNativeControls resizeMode="cover" />
+                            ) : null}
+                        </TouchableOpacity>
+                    ))}
+                </ScrollView>
+            )}
 
             {/* Ações do Post */}
             <View style={styles.postActions}>
@@ -353,6 +477,16 @@ const PostItem = ({ post }) => {
                     </View>
                 </View>
             )}
+
+            {/* MODAL DE IMAGEM ADICIONADO */}
+            <Modal visible={isImageModalVisible} transparent={true} onRequestClose={() => setImageModalVisible(false)}>
+                <View style={styles.imageModalContainer}>
+                    <TouchableOpacity style={styles.closeModalButton} onPress={() => setImageModalVisible(false)}>
+                        <MaterialIcons name="close" size={28} color="white" />
+                    </TouchableOpacity>
+                    <Image source={{ uri: selectedImageUri }} style={styles.imageModalContent} resizeMode="contain" />
+                </View>
+            </Modal>
         </View>
     );
 };
@@ -418,7 +552,6 @@ export const PatientDetailScreen = ({ route, navigation }) => {
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabNav}>
                     {[
                         { id: 'overview', label: 'Visão Geral' },
-                        { id: 'programs', label: 'Programas' },
                         { id: 'progress', label: 'Progresso' },
                         { id: 'tasks', label: 'Tarefas' },
                         { id: 'feed', label: 'Feed' },
@@ -458,7 +591,6 @@ export const PatientDetailScreen = ({ route, navigation }) => {
                     renderItem={() => {
                         switch (activeTab) {
                             case 'overview': return <OverviewTab patient={patient} />;
-                            case 'programs': return <ProgramsTab patient={patient} navigation={navigation} />;
                             case 'progress': return <ProgressTab patient={patient} />; // Passa o objeto 'patient' completo
                             case 'tasks': return <TasksTab patientId={patient.id} onAddTask={() => setTaskModalVisible(true)} />;
                             default: return null;
@@ -859,5 +991,94 @@ const styles = StyleSheet.create({
         fontFamily: FONT_FAMILY.Regular,
         color: ABAETE_COLORS.textSecondary,
         fontSize: 14,
+    },
+    pickerContainer: {
+        borderWidth: 1,
+        borderColor: ABAETE_COLORS.lightGray,
+        borderRadius: 8,
+        marginBottom: 10,
+        backgroundColor: ABAETE_COLORS.white,
+    },
+    chartSection: {
+        backgroundColor: ABAETE_COLORS.white,
+        borderRadius: 12,
+        padding: 16,
+        marginTop: 16,
+        borderWidth: 1,
+        borderColor: ABAETE_COLORS.lightGray,
+    },
+    chartContainer: {
+        height: 280, // Altura ajustada
+        justifyContent: 'center',
+        paddingTop: 20, // Espaço para o gráfico respirar
+    },
+    emptyChartContainer: {
+        height: 220,
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+    },
+    // Estilos para o Picker em ProgressTab
+    pickerContainer: {
+        borderWidth: 1,
+        borderColor: ABAETE_COLORS.lightGray,
+        borderRadius: 8,
+        marginBottom: 10,
+        backgroundColor: ABAETE_COLORS.white,
+    },
+
+    // Estilos para os Gráficos em ProgressTab
+    chartSection: {
+        backgroundColor: ABAETE_COLORS.white,
+        borderRadius: 12,
+        paddingVertical: 16,
+        paddingHorizontal: 8, // Menos padding horizontal para o gráfico
+        marginTop: 16,
+        borderWidth: 1,
+        borderColor: ABAETE_COLORS.lightGray,
+    },
+    chartContainer: {
+        height: 280,
+        justifyContent: 'center',
+        marginTop: 10,
+    },
+    emptyChartContainer: {
+        height: 220,
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+    },
+
+    // Estilos para a Mídia no Feed (copiados de ProfHome)
+    postMediaContainer: {
+        marginTop: 10,
+        marginBottom: 10,
+        height: 200, 
+    },
+    mediaItem: {
+        width: 280,
+        height: 200,
+        borderRadius: 8,
+        marginRight: 10,
+        backgroundColor: '#e9ecef',
+    },
+    imageModalContainer: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    imageModalContent: {
+        width: '100%',
+        height: '80%',
+    },
+    closeModalButton: {
+        position: 'absolute',
+        top: 60,
+        right: 20,
+        zIndex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        borderRadius: 20,
+        padding: 8,
     },
 });

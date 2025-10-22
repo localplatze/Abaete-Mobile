@@ -6,9 +6,7 @@ import { Picker } from '@react-native-picker/picker';
 import { ABAETE_COLORS } from '../constants/Colors';
 import { FONT_FAMILY } from '../constants/Fonts';
 import { FIREBASE_DB } from '../services/firebaseConnection';
-import { ref, onValue, get, update, off, set, push } from 'firebase/database';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import * as Location from 'expo-location';
+import { ref, onValue, get, update, off, set, push, remove } from 'firebase/database';
 
 const phaseTranslations = {
     baseline: 'Linha de Base',
@@ -16,6 +14,27 @@ const phaseTranslations = {
     maintenance: 'Manutenção',
     generalization: 'Generalização',
 };
+
+const ProgramTabs = ({ activePrograms, activeProgramId, onSelectProgram, onEndProgram }) => (
+    <View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.programTabsContainer}>
+            {activePrograms.map(prog => (
+                <TouchableOpacity
+                    key={prog.id}
+                    style={[styles.programTab, activeProgramId === prog.id && styles.programTabActive]}
+                    onPress={() => onSelectProgram(prog.id)}
+                >
+                    <Text style={[styles.programTabText, activeProgramId === prog.id && styles.programTabTextActive]} numberOfLines={1}>
+                        {prog.name}
+                    </Text>
+                    <TouchableOpacity style={styles.closeTabButton} onPress={() => onEndProgram(prog.id)}>
+                        <MaterialIcons name="close" size={16} color={activeProgramId === prog.id ? '#fff' : ABAETE_COLORS.textSecondary} />
+                    </TouchableOpacity>
+                </TouchableOpacity>
+            ))}
+        </ScrollView>
+    </View>
+);
 
 const TargetTrialCard = ({ targetName, program, onRegisterTrial, detailedHelpLevels }) => {
   const [trials, setTrials] = useState([]);
@@ -112,454 +131,332 @@ const TargetTrialCard = ({ targetName, program, onRegisterTrial, detailedHelpLev
   );
 };
 
-const RescheduleModal = ({ visible, onSchedule, onDismiss, suggestedDate }) => {
-  const [scheduleDate, setScheduleDate] = useState(suggestedDate);
-  const [scheduleTime, setScheduleTime] = useState(suggestedDate);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
+const ProgramSelectionStep = ({ patientName, availablePrograms, onStartSession, loading }) => {
+    // O Hook `useState` agora está no nível superior deste componente, o que é correto.
+    const [selected, setSelected] = useState([]);
 
-  // Garante que o estado seja resetado para a nova sugestão sempre que o modal abrir
-  useEffect(() => {
-    if (visible) {
-      setScheduleDate(suggestedDate);
-      setScheduleTime(suggestedDate);
-    }
-  }, [visible, suggestedDate]);
-  
-  const onChangeDate = (event, selectedDate) => {
-    setShowDatePicker(false);
-    if (selectedDate) setScheduleDate(selectedDate);
-  };
-  
-  const onChangeTime = (event, selectedTime) => {
-    setShowTimePicker(false);
-    if (selectedTime) setScheduleTime(selectedTime);
-  };
+    const toggleSelection = (program) => {
+        setSelected(prev => 
+            prev.find(p => p.id === program.id)
+                ? prev.filter(p => p.id !== program.id)
+                : [...prev, program]
+        );
+    };
 
-  const handleSchedulePress = () => {
-    const combinedDateTime = new Date(
-        scheduleDate.getFullYear(), scheduleDate.getMonth(), scheduleDate.getDate(),
-        scheduleTime.getHours(), scheduleTime.getMinutes()
+    return (
+        <SafeAreaView style={styles.safeArea}>
+            <View style={styles.container}>
+                <Text style={styles.headerTitle}>Iniciar Sessão ABA</Text>
+                <Text style={styles.patientInfo}>Paciente: {patientName}</Text>
+                <Text style={styles.label}>Selecione os programas a serem aplicados:</Text>
+                
+                {loading ? <ActivityIndicator size="large" color={ABAETE_COLORS.primaryBlue} /> : (
+                    <FlatList
+                        data={availablePrograms}
+                        keyExtractor={item => item.id}
+                        renderItem={({ item }) => {
+                            const isSelected = selected.find(p => p.id === item.id);
+                            return (
+                                <TouchableOpacity 
+                                    style={[styles.programItem, isSelected && styles.programItemSelected]} 
+                                    onPress={() => toggleSelection(item)}
+                                >
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.programItemTitle, isSelected && {color: ABAETE_COLORS.primaryBlue}]}>{item.name}</Text>
+                                        <Text style={styles.programItemSubtitle}>Fase Atual: {phaseTranslations[item.programProgress.currentPhase]}</Text>
+                                    </View>
+                                    <MaterialIcons 
+                                        name={isSelected ? "check-box" : "check-box-outline-blank"} 
+                                        size={26} 
+                                        color={ABAETE_COLORS.primaryBlue} 
+                                    />
+                                </TouchableOpacity>
+                            );
+                        }}
+                        ListEmptyComponent={<Text style={styles.emptyStateText}>Nenhum programa atribuído a este paciente.</Text>}
+                    />
+                )}
+
+                <TouchableOpacity 
+                    style={[styles.buttonPrimary, selected.length === 0 && {backgroundColor: ABAETE_COLORS.mediumGray}]} 
+                    onPress={() => onStartSession(selected)} 
+                    disabled={selected.length === 0}
+                >
+                    <Text style={styles.buttonText}>Iniciar Sessão ({selected.length})</Text>
+                </TouchableOpacity>
+            </View>
+        </SafeAreaView>
     );
-    onSchedule(combinedDateTime); // Envia o objeto Date completo
-  };
-
-  return (
-    <Modal animationType="fade" transparent={true} visible={visible} onRequestClose={onDismiss}>
-      <View style={styles.modalContainer}>
-        <View style={styles.modalContent}>
-          <MaterialIcons name="check-circle-outline" size={48} color={ABAETE_COLORS.successGreen} style={{ alignSelf: 'center', marginBottom: 15 }} />
-          <Text style={styles.modalTitle}>Sessão Salva!</Text>
-          <Text style={styles.modalText}>Deseja agendar a próxima sessão para este paciente?</Text>
-
-          {/* Seletores de Data e Hora */}
-          <View style={styles.datePickerRow}>
-            <TouchableOpacity style={styles.dateInput} onPress={() => setShowDatePicker(true)}>
-              <MaterialIcons name="event" size={20} color={ABAETE_COLORS.textSecondary} />
-              <Text style={styles.dateInputText}>{scheduleDate.toLocaleDateString('pt-BR')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.dateInput} onPress={() => setShowTimePicker(true)}>
-              <MaterialIcons name="access-time" size={20} color={ABAETE_COLORS.textSecondary} />
-              <Text style={styles.dateInputText}>{scheduleTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</Text>
-            </TouchableOpacity>
-          </View>
-          
-          {showDatePicker && <DateTimePicker value={scheduleDate} mode="date" display="default" onChange={onChangeDate} />}
-          {showTimePicker && <DateTimePicker value={scheduleTime} mode="time" display="default" is24Hour={true} onChange={onChangeTime} />}
-
-          <View style={styles.modalButtonContainer}>
-            <TouchableOpacity style={[styles.modalButton, styles.modalButtonSecondary]} onPress={onDismiss}>
-              <Text style={styles.modalButtonTextSecondary}>Não, obrigado</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.modalButton, styles.modalButtonPrimary]} onPress={handleSchedulePress}>
-              <Text style={styles.modalButtonTextPrimary}>Agendar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
 };
 
 // --- TELA PRINCIPAL: NewAbaScreen ---
 export const NewAbaScreen = ({ route, navigation }) => {
-  const { appointmentId, patientId, patientName } = route.params;
-  const [step, setStep] = useState('program_selection');
-  const [assignedPrograms, setAssignedPrograms] = useState([]);
-  const [selectedProgram, setSelectedProgram] = useState(null);
-  const [programProgress, setProgramProgress] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [sessionStartTime, setSessionStartTime] = useState(null);
-  const [currentLocation, setCurrentLocation] = useState(null);
-  const [sessionData, setSessionData] = useState({});
-  const [sessionNotes, setSessionNotes] = useState('');
-  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
-  const [detailedHelpLevels, setDetailedHelpLevels] = useState({});
-
-  useEffect(() => {
-    const programsRef = ref(FIREBASE_DB, `users/${patientId}/assignedPrograms`);
-    const listener = onValue(programsRef, (snapshot) => {
-      const programs = [];
-      if (snapshot.exists()) { snapshot.forEach(child => programs.push({ id: child.key, ...child.val() })); }
-      setAssignedPrograms(programs);
-      setLoading(false);
-    });
-    return () => off(programsRef, 'value', listener);
-  }, [patientId]);
-
-  useEffect(() => {
-    (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      try { let location = await Location.getCurrentPositionAsync({}); setCurrentLocation(location); }
-      catch (error) { console.error("Erro ao obter localização:", error); }
-    })();
-  }, []);
-
-  const createSafeKey = (str) => {
-      return str.replace(/[.#$[\]/]/g, '').replace(/\s+/g, '_');
-  };
-
-  const handleProgramSelection = async (program) => {
-    setLoading(true);
-    const progressRef = ref(FIREBASE_DB, `users/${patientId}/programProgress/${program.id}`);
-    const snapshot = await get(progressRef);
-    let currentProgress;
-
-    const allHelpLevelsSnapshot = await get(ref(FIREBASE_DB, 'helpLevels'));
-    if (allHelpLevelsSnapshot.exists()) {
-        setDetailedHelpLevels(allHelpLevelsSnapshot.val());
-    }
-
-    program.programProgress = currentProgress; 
-    setSelectedProgram(program);
-    setProgramProgress(currentProgress);
-
-    if (snapshot.exists()) {
-      currentProgress = snapshot.val();
-    } else {
-      const initialPhase = program.baseline?.enabled ? 'baseline' : 'intervention';
-      currentProgress = {
-        currentPhase: initialPhase,
-        currentHelpLevelIndex: 0,
-        masteredTargets: [],
-        sessionHistory: []
-      };
-      await set(progressRef, currentProgress);
-    }
+    const { appointmentData: initialAppointmentData, patientId, patientName, professionalId } = route.params; 
     
-    // Injeta o progresso no objeto do programa para facilitar o acesso
-    program.programProgress = currentProgress; 
+    // Estados principais
+    const [step, setStep] = useState('program_selection');
+    const [availablePrograms, setAvailablePrograms] = useState([]);
+    const [activePrograms, setActivePrograms] = useState([]);
+    const [activeProgramId, setActiveProgramId] = useState(null);
+    const [loading, setLoading] = useState(true);
+    
+    // Estados para coletar dados da sessão
+    const [sessionStartTime, setSessionStartTime] = useState(null); // Guarda o momento em que a sessão REALMENTE começou
+    const [sessionTrialData, setSessionTrialData] = useState({}); // Guarda os dados das tentativas
+    const [completedProgramData, setCompletedProgramData] = useState({}); // Guarda os resultados de programas já finalizados
+    const [isSaving, setIsSaving] = useState(false);
+    
+    const [detailedHelpLevels, setDetailedHelpLevels] = useState({});
 
-    setSelectedProgram(program);
-    setProgramProgress(currentProgress);
-    setSessionStartTime(new Date());
-    setStep('session_execution');
-    const initialData = {};
-    program.targets.forEach(target => {
-      const safeKey = createSafeKey(target);
-      initialData[safeKey] = []; 
-    });
-    setSessionData(initialData);
-    setLoading(false);
-  };
-
-  const handleRegisterTrial = useCallback((targetName, trials) => {
-    // ** CORREÇÃO APLICADA AQUI **
-    const safeKey = createSafeKey(targetName);
-    setSessionData(prevData => ({ ...prevData, [safeKey]: trials }));
-  }, []);
-  
-  const getNextPhase = (currentPhase, program) => {
-      const phaseOrder = ['baseline', 'intervention', 'generalization', 'maintenance'];
-      const currentIndex = phaseOrder.indexOf(currentPhase);
-      for (let i = currentIndex + 1; i < phaseOrder.length; i++) {
-          const nextPhaseKey = phaseOrder[i];
-          if (program[nextPhaseKey]?.enabled) {
-              return nextPhaseKey;
-          }
-      }
-      return 'completed'; // Programa finalizado
-  };
-
-  const evaluateAndProgress = (newSessionResult) => {
-      // Cria uma cópia segura do progresso atual para evitar mutações
-      let updatedProgress = JSON.parse(JSON.stringify(programProgress));
-      
-      // Garante que o histórico de sessões seja um array
-      if (!Array.isArray(updatedProgress.sessionHistory)) {
-          updatedProgress.sessionHistory = [];
-      }
-
-      // Adiciona o resultado da sessão atual no início do histórico
-      // e mantém apenas os últimos 10-15 registros para performance
-      updatedProgress.sessionHistory.unshift(newSessionResult);
-      updatedProgress.sessionHistory = updatedProgress.sessionHistory.slice(0, 15);
-
-      const currentPhaseKey = updatedProgress.currentPhase;
-      const criteria = selectedProgram[currentPhaseKey];
-
-      // Se a progressão automática estiver desativada, não faz mais nada
-      if (!selectedProgram.autoProgression || !criteria) {
-          return updatedProgress;
-      }
-
-      // Filtra o histórico para obter apenas as sessões da fase atual
-      const sessionsInCurrentPhase = updatedProgress.sessionHistory.filter(s => s.phase === currentPhaseKey);
-
-      let criteriaMet = false;
-
-      // LÓGICA DE AVANÇO ESPECÍFICA PARA CADA FASE
-      if (currentPhaseKey === 'intervention') {
-          const requiredSessions = criteria.sessions || 3;
-          const requiredAccuracy = criteria.successPercentage || 80;
-          
-          // Verifica se já temos o número mínimo de sessões no histórico para avaliar
-          if (sessionsInCurrentPhase.length >= requiredSessions) {
-              // Pega as X sessões mais recentes da fase atual
-              const recentSessions = sessionsInCurrentPhase.slice(0, requiredSessions);
-              // Verifica se TODAS elas atendem ao critério de acerto
-              const allMetCriteria = recentSessions.every(session => session.accuracy >= requiredAccuracy);
-              
-              if (allMetCriteria) {
-                  criteriaMet = true;
-              }
-          }
-      } else { // Lógica para Baseline, Maintenance, Generalization
-          const requiredSessions = criteria.sessions || 1;
-          
-          // Verifica se o número de sessões concluídas nesta fase é igual ou maior ao necessário
-          if (sessionsInCurrentPhase.length >= requiredSessions) {
-              criteriaMet = true;
-          }
-      }
-      
-      // Se o critério foi atendido, avança para a próxima fase
-      if (criteriaMet) {
-          console.log(`Critério para a fase '${currentPhaseKey}' atendido. Avançando...`);
-          updatedProgress.currentPhase = getNextPhase(currentPhaseKey, selectedProgram);
-          // Opcional: Você pode resetar o histórico aqui se quiser que cada fase comece do zero
-          // updatedProgress.sessionHistory = []; 
-      }
-      
-      return updatedProgress;
-  };
-
-  const handleSaveSession = async () => {
-    if (!selectedProgram || !sessionStartTime) {
-      Alert.alert("Erro", "Dados da sessão incompletos.");
-      return;
-    }
-    setIsSaving(true);
-    const endTime = new Date();
-    const durationMinutes = Math.round((endTime.getTime() - sessionStartTime.getTime()) / 60000);
-
-    // --- CÁLCULO DE PONTUAÇÃO ---
-    let totalScore = 0;
-    let totalTrials = 0;
-    Object.values(sessionData).forEach(trials => {
-        trials.forEach(trial => {
-            totalScore += trial.score; // Soma os scores já calculados
-            totalTrials++;
+    useEffect(() => {
+        const programsRef = ref(FIREBASE_DB, `users/${patientId}/assignedPrograms`);
+        const listener = onValue(programsRef, (snapshot) => {
+            const programs = [];
+            if (snapshot.exists()) {
+                const promises = Object.entries(snapshot.val()).map(async ([programId, programData]) => {
+                    const program = { id: programId, ...programData };
+                    const progressSnap = await get(ref(FIREBASE_DB, `users/${patientId}/programProgress/${programId}`));
+                    program.programProgress = progressSnap.exists() 
+                        ? progressSnap.val() 
+                        : { currentPhase: program.baseline?.enabled ? 'baseline' : 'intervention', sessionHistory: [] };
+                    return program;
+                });
+                Promise.all(promises).then(resolvedPrograms => {
+                    setAvailablePrograms(resolvedPrograms);
+                    setLoading(false);
+                });
+            } else {
+                setLoading(false);
+            }
         });
-    });
-    // A precisão agora é a média dos scores, em porcentagem
-    const accuracy = totalTrials > 0 ? Math.round((totalScore / totalTrials) * 100) : 0;
+        
+        get(ref(FIREBASE_DB, 'helpLevels')).then(snap => snap.exists() && setDetailedHelpLevels(snap.val()));
 
-    const trialsDataAsArray = Object.entries(sessionData).map(([targetName, trials]) => ({
-        target: targetName.replace(/_/g, ' '),
-        attempts: trials
-    }));
+        return () => off(programsRef, 'value', listener);
+    }, [patientId]);
 
-    const newSessionResult = {
-        date: endTime.toISOString(),
-        accuracy, // Agora baseado em score
-        phase: programProgress.currentPhase,
-        durationMinutes,
-        appointmentId: appointmentId
+    const handleStartSession = (selectedPrograms) => {
+        if (selectedPrograms.length === 0) return;
+        
+        setSessionStartTime(new Date()); // Apenas marca o tempo de início
+        setActivePrograms(selectedPrograms);
+        setActiveProgramId(selectedPrograms[0].id);
+        setStep('session_execution'); // Simplesmente muda a tela, sem DB
+    };
+
+    const handleRegisterTrial = useCallback((programId, targetName, trials) => {
+        const safeKey = targetName.replace(/[.#$[\]/]/g, '_');
+        setSessionTrialData(prev => ({
+            ...prev,
+            [programId]: { ...(prev[programId] || {}), [safeKey]: trials }
+        }));
+    }, []);
+
+    const handleEndProgram = (programIdToEnd) => {
+        const programName = activePrograms.find(p => p.id === programIdToEnd)?.name;
+        Alert.alert("Encerrar Programa", `Deseja finalizar o programa "${programName}"?`, [
+            { text: "Cancelar", style: "cancel" },
+            { text: "Finalizar", onPress: () => finalizeProgram(programIdToEnd) }
+        ]);
+    };
+
+    const finalizeProgram = (programIdToFinalize) => {
+        const program = activePrograms.find(p => p.id === programIdToFinalize);
+        const programTrials = sessionTrialData[programIdToFinalize] || {};
+        
+        // Calcula a acurácia para este programa
+        let totalScore = 0, totalTrials = 0;
+        Object.values(programTrials).forEach(trials => {
+            trials.forEach(trial => { totalScore += trial.score; totalTrials++; });
+        });
+        const accuracy = totalTrials > 0 ? Math.round((totalScore / totalTrials) * 100) : 0;
+        
+        // Guarda os dados finalizados deste programa no estado
+        setCompletedProgramData(prev => ({
+            ...prev,
+            [programIdToFinalize]: {
+                accuracy,
+                phaseConducted: program.programProgress.currentPhase,
+                programId: program.id,
+                programName: program.name,
+                trialsData: Object.entries(programTrials).map(([targetKey, attempts]) => ({ 
+                    target: targetKey.replace(/_/g, ' '), 
+                    attempts 
+                })),
+            }
+        }));
+
+        // Remove o programa da lista ativa
+        const remainingPrograms = activePrograms.filter(p => p.id !== programIdToFinalize);
+        setActivePrograms(remainingPrograms);
+
+        if (remainingPrograms.length > 0) {
+            setActiveProgramId(remainingPrograms[0].id);
+        } else {
+            // Se foi o último, aciona o salvamento final de toda a sessão
+            saveEntireSession();
+        }
     };
     
-    const newProgress = evaluateAndProgress(newSessionResult);
+    const saveEntireSession = async () => {
+        if (isSaving) return;
+        setIsSaving(true);
+        
+        // Agrupa os dados de todos os programas finalizados
+        const finalAbaData = Object.values(completedProgramData);
 
-    const updateData = {
-      status: 'completed',
-      dateTimeEnd: endTime.toISOString(),
-      durationMinutes,
-      location: currentLocation ? { lat: currentLocation.coords.latitude, lon: currentLocation.coords.longitude } : null,
-      updatedAt: new Date().toISOString(),
-      abaData: {
-        programId: selectedProgram.id,
-        phaseConducted: programProgress.currentPhase,
-        accuracy,
-        trialsData: trialsDataAsArray,
-        sessionNotes: sessionNotes.trim(),
-      }
+        // Se nenhum dado foi coletado, não salva nada
+        if (finalAbaData.length === 0) {
+            Alert.alert("Atenção", "Nenhuma tentativa foi registrada. A sessão não será salva.", [
+                { text: "OK", onPress: () => navigation.goBack() }
+            ]);
+            setIsSaving(false);
+            return;
+        }
+
+        const endTime = new Date();
+        const durationMinutes = Math.round((endTime.getTime() - sessionStartTime.getTime()) / 60000);
+        
+        // Pega a acurácia média de todos os programas aplicados
+        const overallAccuracy = Math.round(finalAbaData.reduce((sum, prog) => sum + prog.accuracy, 0) / finalAbaData.length);
+
+        const finalAppointment = {
+            patientId, professionalId,
+            dateTimeStart: sessionStartTime.toISOString(),
+            dateTimeEnd: endTime.toISOString(),
+            durationMinutes,
+            status: 'completed',
+            type: 'Sessão ABA',
+            createdAt: new Date().toISOString(),
+            createdBy: professionalId,
+            // O abaData agora pode conter múltiplos programas
+            abaData: {
+                accuracy: overallAccuracy,
+                sessionNotes: '', // Adicionar um campo de notas gerais se desejar
+                programs: finalAbaData, // Array com os resultados de cada programa
+            }
+        };
+
+        try {
+            // A ÚNICA operação de escrita no Firebase
+            await push(ref(FIREBASE_DB, 'appointments'), finalAppointment);
+
+            // Adiciona a exceção na regra de 'schedules' para invalidar o agendamento virtual
+            if (initialAppointmentData.isVirtual) {
+                const [scheduleId, timestamp] = initialAppointmentData.id.split('_');
+                const originalDateTime = new Date(parseInt(timestamp));
+                const exceptionKey = createSafeFirebaseKeyFromDate(originalDateTime); // Use a função auxiliar que criamos
+                await set(ref(FIREBASE_DB, `schedules/${scheduleId}/exceptions/cancelled/${exceptionKey}`), true);
+            }
+            
+            Alert.alert("Sessão Salva", "Todos os dados da sessão foram salvos com sucesso.", [
+                { text: "OK", onPress: () => navigation.goBack() }
+            ]);
+        } catch (error) {
+            console.error("Erro ao salvar sessão:", error);
+            Alert.alert("Erro", "Não foi possível salvar a sessão.");
+        } finally {
+            setIsSaving(false);
+        }
     };
 
-    try {
-      const appointmentRef = ref(FIREBASE_DB, `appointments/${appointmentId}`);
-      const progressRef = ref(FIREBASE_DB, `users/${patientId}/programProgress/${selectedProgram.id}`);
-      
-      await update(appointmentRef, updateData);
-      await set(progressRef, newProgress);
-
-      setShowRescheduleModal(true);
-
-    } catch (error) {
-      console.error("Erro ao salvar sessão:", error);
-      Alert.alert("Erro", `Não foi possível salvar a sessão. \n\nDetalhe: ${error.message}`);
-    } finally {
-      setIsSaving(false);
-    }
-};
-
-  const getNextSessionDate = () => {
-    const frequency = selectedProgram?.maintenance?.frequency || 'Semanalmente';
-    const nextDate = new Date();
-    if (frequency === 'Diariamente') {
-      nextDate.setDate(nextDate.getDate() + 1);
-    } else if (frequency === 'Mensalmente') {
-      nextDate.setMonth(nextDate.getMonth() + 1);
-    } else { // Semanalmente é o padrão
-      nextDate.setDate(nextDate.getDate() + 7);
-    }
-    return nextDate;
-  };
-
-  const handleCreateNextSession = async (selectedDateTime) => {
-    const professionalId = route.params?.professionalId || FIREBASE_AUTH.currentUser.uid;
-
-    if (!professionalId) {
-      Alert.alert("Erro", "Não foi possível identificar o profissional logado para agendar a sessão.");
-      navigation.goBack();
-      return;
-    }
-
-    const newAppointmentData = {
-        patientId,
-        professionalId,
-        scheduleDate: selectedDateTime.toLocaleDateString('pt-BR'),
-        dateTimeStart: selectedDateTime.toISOString(),
-        type: 'Sessão ABA', // Mantém o tipo
-        status: 'scheduled',
-        createdBy: professionalId,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-    };
-
-    if (selectedProgram) {
-        newAppointmentData.programId = selectedProgram.id;
-        newAppointmentData.programName = selectedProgram.name;
-    }
-
-    try {
-        const newAppointmentRef = push(ref(FIREBASE_DB, 'appointments'));
-        await set(newAppointmentRef, newAppointmentData);
-        Alert.alert("Agendado!", "A próxima sessão foi agendada com sucesso.", [
-            { text: 'OK', onPress: () => navigation.goBack() }
-        ]);
-    } catch (error) {
-        console.error("Erro ao agendar:", error);
-        Alert.alert("Erro", "Não foi possível criar o próximo agendamento.");
-        navigation.goBack();
-    }
-  };
-
-  const handleDismissModal = () => {
-      setShowRescheduleModal(false);
-      navigation.goBack();
-  };
-
-  if (loading) {
-    return <SafeAreaView style={styles.safeArea}><ActivityIndicator style={{ flex: 1 }} size="large" color={ABAETE_COLORS.primaryBlue} /></SafeAreaView>;
-  }
-
-  if (step === 'program_selection') {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.container}>
-          <Text style={styles.headerTitle}>Sessão ABA</Text>
-          <Text style={styles.patientInfo}>Paciente: {patientName}</Text>
-          <Text style={styles.label}>Selecione o programa para esta sessão:</Text>
-          {assignedPrograms.length > 0 ? (
-            <FlatList data={assignedPrograms} keyExtractor={item => item.id} renderItem={({ item }) => (
-              <TouchableOpacity style={styles.programItem} onPress={() => handleProgramSelection(item)}>
-                <View>
-                  <Text style={styles.programItemTitle}>{item.name}</Text>
-                  <Text style={styles.programItemSubtitle}>{item.type}</Text>
-                </View>
-                <MaterialIcons name="chevron-right" size={24} color={ABAETE_COLORS.primaryBlue} />
-              </TouchableOpacity>
-            )} />
-          ) : <Text style={styles.emptyStateText}>Nenhum programa atribuído.</Text>}
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (step === 'session_execution' && selectedProgram) {
-    const phaseKey = programProgress.currentPhase;
-    const translatedPhase = phaseTranslations[phaseKey] || (phaseKey.charAt(0).toUpperCase() + phaseKey.slice(1));
-    const phaseConfig = selectedProgram[phaseKey];
-    const totalSessionsInPhase = phaseConfig?.sessions || 1;
-    const completedSessionsInPhase = programProgress.sessionHistory?.filter(s => s.phase === phaseKey).length || 0;
-    const sessionCounterText = `Sessão ${completedSessionsInPhase + 1} de ${totalSessionsInPhase}`;
-
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
-          <Text style={styles.headerTitle}>{selectedProgram.name}</Text>
-          <Text style={styles.patientInfo}>Paciente: {patientName}</Text>
-          
-          <View style={styles.infoBox}>
-             <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
-                <Text style={styles.infoBoxTitle}>Fase Atual: <Text style={{ color: ABAETE_COLORS.textPrimary }}>{translatedPhase}</Text></Text>
-                {phaseConfig?.sessions && <Text style={styles.phaseCounterText}>{sessionCounterText}</Text>}
-             </View>
-             <Text style={styles.infoBoxContent}>{selectedProgram.description}</Text>
-          </View>
-
-          <Text style={styles.sectionTitle}>Registro de Tentativas por Alvo</Text>
-          <Text style={styles.sectionHelperText}>Toque nos botões para registrar. Pressione e segure um registro para apagar.</Text>
-
-          {selectedProgram.targets.map((target, index) => (
-            <TargetTrialCard 
-              key={`${target}-${index}`} 
-              targetName={target} 
-              program={selectedProgram}
-              onRegisterTrial={handleRegisterTrial} 
-              detailedHelpLevels={detailedHelpLevels} 
+    // ----- RENDERIZAÇÃO -----
+    
+    if (step === 'program_selection') {
+        return (
+            <ProgramSelectionStep
+                patientName={patientName}
+                availablePrograms={availablePrograms}
+                onStartSession={handleStartSession}
+                loading={loading}
             />
-          ))}
+        );
+    }
+    
+    if (step === 'session_execution') {
+        const currentProgram = activePrograms.find(p => p.id === activeProgramId);
+        
+        // --- LÓGICA DE CÁLCULO ADICIONADA AQUI ---
+        let phaseKey, translatedPhase, phaseConfig, totalSessionsInPhase, completedSessionsInPhase, sessionCounterText = '';
 
-          <Text style={styles.sectionTitle}>Observações Gerais da Sessão</Text>
-          <TextInput
-            style={styles.sessionNotesInput}
-            placeholder="Anote aqui qualquer observação relevante..."
-            value={sessionNotes}
-            onChangeText={setSessionNotes}
-            multiline
-          />
+        if (currentProgram) {
+            phaseKey = currentProgram.programProgress.currentPhase;
+            translatedPhase = phaseTranslations[phaseKey] || (phaseKey.charAt(0).toUpperCase() + phaseKey.slice(1));
+            phaseConfig = currentProgram[phaseKey]; // Ex: currentProgram.baseline, currentProgram.intervention
+            
+            if (phaseConfig?.sessions) {
+                totalSessionsInPhase = phaseConfig.sessions;
+                // O histórico de sessões ainda não está sendo atualizado em tempo real,
+                // então vamos pegar do progresso inicial
+                completedSessionsInPhase = currentProgram.programProgress.sessionHistory?.filter(s => s.phase === phaseKey).length || 0;
+                sessionCounterText = `Sessão ${completedSessionsInPhase + 1} de ${totalSessionsInPhase}`;
+            }
+        }
+        // --- FIM DA LÓGICA ---
 
-          <TouchableOpacity style={styles.buttonPrimary} onPress={handleSaveSession} disabled={isSaving}>
-            {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Finalizar e Salvar Sessão</Text>}
-          </TouchableOpacity>
-          <View style={{ height: 50 }} />
-        </ScrollView>
+        return (
+            <SafeAreaView style={styles.safeArea}>
+                <ScrollView style={styles.container} keyboardShouldPersistTaps="handled" stickyHeaderIndices={[2]}>
+                    <Text style={styles.headerTitle}>Sessão em Andamento</Text>
+                    <Text style={styles.patientInfo}>Paciente: {patientName}</Text>
+                    
+                    <ProgramTabs
+                        activePrograms={activePrograms}
+                        activeProgramId={activeProgramId}
+                        onSelectProgram={setActiveProgramId}
+                        onEndProgram={handleEndProgram}
+                    />
 
-        <RescheduleModal
-          visible={showRescheduleModal}
-          onDismiss={handleDismissModal}
-          onSchedule={handleCreateNextSession}
-          suggestedDate={getNextSessionDate()}
-        />
-      </SafeAreaView>
-    );
-  }
+                    {currentProgram ? (
+                        <View style={{ marginTop: 20 }}>
+                            {/* --- infoBox CORRIGIDO E COMPLETO --- */}
+                            <View style={styles.infoBox}>
+                              <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
+                                  <Text style={styles.infoBoxTitle}>Fase Atual: <Text style={{ color: ABAETE_COLORS.textPrimary }}>{translatedPhase}</Text></Text>
+                                  {sessionCounterText ? <Text style={styles.phaseCounterText}>{sessionCounterText}</Text> : null}
+                              </View>
+                              {currentProgram.description ? <Text style={styles.infoBoxContent}>{currentProgram.description}</Text> : null}
+                            </View>
+                            {/* --- FIM DA CORREÇÃO --- */}
 
-  return <SafeAreaView style={styles.safeArea} />;
+                            <Text style={styles.sectionTitle}>Registro de Tentativas</Text>
+                            {currentProgram.targets.map(target => (
+                                <TargetTrialCard 
+                                    key={`${currentProgram.id}-${target}`} 
+                                    targetName={target} 
+                                    program={currentProgram}
+                                    onRegisterTrial={(targetName, trials) => handleRegisterTrial(currentProgram.id, targetName, trials)} 
+                                    detailedHelpLevels={detailedHelpLevels} 
+                                />
+                            ))}
+                        </View>
+                    ) : (
+                        <View style={styles.centered}>
+                            <ActivityIndicator size="large" color={ABAETE_COLORS.primaryBlue} />
+                            <Text style={styles.emptyStateText}>Finalizando e salvando sessão...</Text>
+                        </View>
+                    )}
+                    
+                    <View style={{ height: 50 }} />
+                </ScrollView>
+                {isSaving && <ActivityIndicator style={StyleSheet.absoluteFill} size="large" color={ABAETE_COLORS.primaryBlue} />}
+            </SafeAreaView>
+        );
+    }
+
+    return <SafeAreaView style={styles.safeArea}><ActivityIndicator size="large" color={ABAETE_COLORS.primaryBlue} /></SafeAreaView>;
 };
+
+function createSafeFirebaseKeyFromDate(date) {
+    const pad = (num) => String(num).padStart(2, '0');
+    const year = date.getFullYear();
+    const month = pad(date.getMonth() + 1);
+    const day = pad(date.getDate());
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    const seconds = pad(date.getSeconds());
+    return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}`;
+}
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#f4f6f8' },
@@ -806,5 +703,47 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.SemiBold,
     fontSize: 14,
     color: ABAETE_COLORS.primaryBlue,
-  }
+  },
+  // Estilos para seleção de múltiplos programas
+  programItemSelected: {
+    backgroundColor: ABAETE_COLORS.primaryBlueLight,
+    borderColor: ABAETE_COLORS.primaryBlue,
+  },
+  
+  // Estilos para a barra de abas de programas
+  programTabsContainer: {
+    flexDirection: 'row',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: ABAETE_COLORS.lightGray,
+  },
+  programTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  programTabActive: {
+    backgroundColor: ABAETE_COLORS.primaryBlue,
+  },
+  programTabText: {
+    fontFamily: FONT_FAMILY.SemiBold,
+    color: ABAETE_COLORS.textSecondary,
+    maxWidth: 120, // Evita que nomes longos quebrem o layout
+  },
+  programTabTextActive: {
+    color: '#fff',
+  },
+  closeTabButton: {
+    marginLeft: 8,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
 });

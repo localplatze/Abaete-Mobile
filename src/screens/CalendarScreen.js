@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, FlatList, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
-import { ref, onValue, query, orderByChild, equalTo } from 'firebase/database';
+import { ref, onValue, query, orderByChild, equalTo, update, set as firebaseSet, remove } from 'firebase/database';
 import { FIREBASE_DB } from '../services/firebaseConnection';
 import { ABAETE_COLORS } from '../constants/Colors';
 import { FONT_FAMILY } from '../constants/Fonts';
@@ -33,17 +33,20 @@ const AppointmentItem = ({ item, navigation, professionalId, onCancelAppointment
         completed: { text: 'Concluído', color: ABAETE_COLORS.successGreen, icon: 'check-circle' },
         cancelled_by_professional: { text: 'Cancelado', color: ABAETE_COLORS.errorRed, icon: 'cancel' },
     };
-    const statusInfo = statusMap[item.status] || { text: item.status, color: ABAETE_COLORS.textSecondary, icon: 'help-outline' };
+    const statusInfo = {
+        scheduled: { text: 'Agendado', color: ABAETE_COLORS.primaryBlue, icon: 'event' },
+        completed: { text: 'Concluído', color: ABAETE_COLORS.successGreen, icon: 'check-circle' },
+        cancelled: { text: 'Cancelado', color: ABAETE_COLORS.errorRed, icon: 'cancel' },
+    }[item.status] || { text: item.status, color: ABAETE_COLORS.textSecondary, icon: 'help-outline' };
 
     const handleLongPress = () => {
-        // Permite o cancelamento apenas de agendamentos futuros
         if (item.status === 'scheduled' && new Date(item.dateTimeStart) > new Date()) {
             Alert.alert(
                 "Cancelar Agendamento",
-                `Deseja cancelar a sessão de ${item.type} com ${patientName}?`,
+                `Deseja cancelar a sessão de ${item.type} com ${item.patientName}?`,
                 [
                     { text: "Não", style: "cancel" },
-                    { text: "Sim, Cancelar", style: "destructive", onPress: () => onCancelAppointment(item.id) }
+                    { text: "Sim", style: "destructive", onPress: () => onCancelAppointment(item) }
                 ]
             );
         }
@@ -55,8 +58,9 @@ const AppointmentItem = ({ item, navigation, professionalId, onCancelAppointment
             onPress={() => {
                 if (item.type === 'Sessão ABA' && item.status === 'scheduled') {
                     navigation.navigate('NewAba', { 
-                        appointmentId: item.id, patientId: item.patientId, patientName: patientName,
-                        professionalId: professionalId, programId: item.programId
+                        appointmentData: item, // Passa o objeto inteiro para a tela de ABA
+                        patientId: item.patientId, patientName: item.patientName,
+                        professionalId: item.professionalId, programId: item.programId
                     });
                 }
             }}
@@ -64,11 +68,12 @@ const AppointmentItem = ({ item, navigation, professionalId, onCancelAppointment
             disabled={item.status !== 'scheduled'}
         >
             <View style={styles.agendaCardTime}>
-                <Text style={styles.agendaHourText}>{new Date(item.dateTimeStart).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</Text>
+                <Text style={styles.agendaHourText}>{String(new Date(item.dateTimeStart).getHours()).padStart(2, '0')}</Text>
+                <Text style={styles.agendaMinuteText}>{String(new Date(item.dateTimeStart).getMinutes()).padStart(2, '0')}</Text>
             </View>
             <View style={[styles.agendaCardDivider, { backgroundColor: statusInfo.color }]} />
             <View style={styles.agendaCardDetails}>
-                <Text style={styles.agendaCardPaciente}>{patientName}</Text>
+                <Text style={styles.agendaCardPaciente}>{item.patientName}</Text>
                 <Text style={styles.agendaCardTipo}>{item.programName || item.type}</Text>
                 <View style={styles.statusBadge}>
                     <MaterialIcons name={statusInfo.icon} size={14} color={statusInfo.color} />
@@ -92,61 +97,143 @@ async function getCachedPatientName(patientId) {
 export const CalendarScreen = ({ route, navigation }) => {
     const { professionalId } = route.params;
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+    const [currentMonth, setCurrentMonth] = useState(new Date().getMonth() + 1);
+    const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+
+    // Estados para os dados processados
     const [appointmentsByDate, setAppointmentsByDate] = useState({});
     const [markedDates, setMarkedDates] = useState({});
     const [loading, setLoading] = useState(true);
 
+    // Efeito principal que busca dados e processa o calendário
     useEffect(() => {
         if (!professionalId) return;
-        const appointmentsRef = query(ref(FIREBASE_DB, 'appointments'), orderByChild('professionalId'), equalTo(professionalId));
-        
-        const unsubscribe = onValue(appointmentsRef, (snapshot) => {
-            const fetchedAppointments = {};
-            const marks = {};
-            if (snapshot.exists()) {
-                snapshot.forEach(child => {
-                    const app = { id: child.key, ...child.val() };
-                    const dateStr = new Date(app.dateTimeStart).toISOString().split('T')[0];
-                    if (!fetchedAppointments[dateStr]) fetchedAppointments[dateStr] = [];
-                    fetchedAppointments[dateStr].push(app);
 
-                    // A marcação agora depende do status
+        const schedulesRef = query(ref(FIREBASE_DB, 'schedules'), orderByChild('professionalId'), equalTo(professionalId));
+        const appointmentsRef = query(ref(FIREBASE_DB, 'appointments'), orderByChild('professionalId'), equalTo(professionalId));
+
+        const processData = async (schedulesSnapshot, appointmentsSnapshot) => {
+            setLoading(true);
+            
+            const schedules = schedulesSnapshot.exists() ? schedulesSnapshot.val() : {};
+            const appointments = appointmentsSnapshot.exists() ? appointmentsSnapshot.val() : {};
+            
+            const patientCache = {};
+            const generatedAppointments = {};
+            const marks = {};
+
+            const startOfMonth = new Date(currentYear, currentMonth - 1, 1);
+            const endOfMonth = new Date(currentYear, currentMonth, 0);
+
+            // 1. Gera agendamentos "virtuais" a partir das regras em 'schedules'
+            for (const scheduleId in schedules) {
+                const rule = { id: scheduleId, ...schedules[scheduleId] };
+                for (let day = new Date(startOfMonth); day <= endOfMonth; day.setDate(day.getDate() + 1)) {
+                    const ruleStart = new Date(rule.startDate + 'T00:00:00');
+                    const ruleEnd = new Date(rule.endDate + 'T23:59:59');
+
+                    if (day >= ruleStart && day <= ruleEnd) {
+                        const dayOfWeek = day.getDay();
+                        const timetableForDay = Array.isArray(rule.weeklyTimetable) ? rule.weeklyTimetable[dayOfWeek] : rule.weeklyTimetable[dayOfWeek.toString()];
+                        
+                        if (timetableForDay) {
+                            for (const time of timetableForDay) {
+                                const [hour, minute] = time.split(':');
+                                const appDateTime = new Date(day);
+                                appDateTime.setHours(parseInt(hour), parseInt(minute), 0, 0);
+                                const exceptionKey = appDateTime.toISOString().replace(/\./g, ',');
+
+                                if (!rule.exceptions?.cancelled?.[exceptionKey]) {
+                                    const dateStr = day.toISOString().split('T')[0];
+                                    if (!generatedAppointments[dateStr]) generatedAppointments[dateStr] = [];
+                                    
+                                    if (!patientCache[rule.patientId]) {
+                                        const user = await getCachedUserData(rule.patientId);
+                                        patientCache[rule.patientId] = user.displayName;
+                                    }
+
+                                    generatedAppointments[dateStr].push({
+                                        id: `${rule.id}_${appDateTime.getTime()}`,
+                                        isVirtual: true, // Identifica que veio de uma regra
+                                        ...rule,
+                                        patientName: patientCache[rule.patientId],
+                                        dateTimeStart: appDateTime.toISOString(),
+                                        status: 'scheduled'
+                                    });
+                                    marks[dateStr] = { marked: true, dotColor: ABAETE_COLORS.primaryBlue };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 2. Mescla com agendamentos "reais" de 'appointments' (concluídos, cancelados, únicos)
+            for (const appId in appointments) {
+                const app = { id: appId, ...appointments[appId] };
+                const appDate = new Date(app.dateTimeStart);
+
+                if (appDate.getFullYear() === currentYear && appDate.getMonth() === currentMonth - 1) {
+                    const dateStr = appDate.toISOString().split('T')[0];
+                    if (!generatedAppointments[dateStr]) generatedAppointments[dateStr] = [];
+
+                    if (!patientCache[app.patientId]) {
+                        const user = await getCachedUserData(app.patientId);
+                        patientCache[app.patientId] = user.displayName;
+                    }
+
+                    // Se já existe um agendamento virtual no mesmo horário, remove-o
+                    const existingVirtualIndex = generatedAppointments[dateStr].findIndex(vApp => new Date(vApp.dateTimeStart).getTime() === appDate.getTime());
+                    if (existingVirtualIndex !== -1) {
+                        generatedAppointments[dateStr].splice(existingVirtualIndex, 1);
+                    }
+                    
+                    generatedAppointments[dateStr].push({ ...app, patientName: patientCache[app.patientId] });
+
                     if (app.status === 'scheduled') {
                         marks[dateStr] = { marked: true, dotColor: ABAETE_COLORS.primaryBlue };
                     }
-                });
+                }
             }
-            setAppointmentsByDate(fetchedAppointments);
+
+            setAppointmentsByDate(generatedAppointments);
             setMarkedDates(marks);
             setLoading(false);
-        });
-        return () => unsubscribe();
-    }, [professionalId]);
+        };
 
-    const handleCancelAppointment = async (appointmentId) => {
-        const appointmentRef = ref(FIREBASE_DB, `appointments/${appointmentId}`);
-        try {
-            await update(appointmentRef, {
-                status: 'cancelled_by_professional',
-                updatedAt: new Date().toISOString()
-            });
-            Alert.alert("Sucesso", "O agendamento foi cancelado.");
-        } catch (error) {
-            console.error("Erro ao cancelar agendamento:", error);
-            Alert.alert("Erro", "Não foi possível cancelar o agendamento.");
+        let schedulesData, appointmentsData;
+        const onSchedules = onValue(schedulesRef, (snapshot) => { schedulesData = snapshot; if (appointmentsData) processData(schedulesData, appointmentsData); });
+        const onAppointments = onValue(appointmentsRef, (snapshot) => { appointmentsData = snapshot; if (schedulesData) processData(schedulesData, appointmentsData); });
+
+        return () => {
+            onSchedules();
+            onAppointments();
+        };
+    }, [professionalId, currentMonth, currentYear]);
+
+    const handleCancelAppointment = useCallback(async (appointment) => {
+        if (appointment.isVirtual) {
+            // Se é um agendamento de uma regra, adiciona uma exceção
+            const [scheduleId, isoDateTime] = appointment.id.split('_');
+            const exceptionKey = isoDateTime.replace(/\./g, ',');
+            const exceptionRef = ref(FIREBASE_DB, `schedules/${scheduleId}/exceptions/cancelled/${exceptionKey}`);
+            try {
+                await firebaseSet(exceptionRef, true);
+                Alert.alert("Sucesso", "A ocorrência foi cancelada.");
+            } catch (error) { Alert.alert("Erro", "Não foi possível cancelar."); }
+        } else {
+            // Se é um agendamento único, atualiza seu status
+            const appointmentRef = ref(FIREBASE_DB, `appointments/${appointment.id}`);
+            try {
+                await update(appointmentRef, { status: 'cancelled' });
+                Alert.alert("Sucesso", "O agendamento foi cancelado.");
+            } catch (error) { Alert.alert("Erro", "Não foi possível cancelar."); }
         }
-    };
+    }, []);
 
     const appointmentsForSelectedDay = useMemo(() => {
         const appointments = appointmentsByDate[selectedDate] || [];
-        return appointments.sort((a, b) => {
-            // Lógica de ordenação: Agendado > Concluído > Cancelado, depois por horário
-            const statusOrder = { 'scheduled': 1, 'completed': 2, 'cancelled_by_professional': 3 };
-            if ((statusOrder[a.status] || 99) !== (statusOrder[b.status] || 99)) {
-                return (statusOrder[a.status] || 99) - (statusOrder[b.status] || 99);
-            }
-            return new Date(a.dateTimeStart) - new Date(b.dateTimeStart);
-        });
+        return appointments.sort((a, b) => new Date(a.dateTimeStart) - new Date(b.dateTimeStart));
     }, [selectedDate, appointmentsByDate]);
 
     return (
@@ -158,14 +245,17 @@ export const CalendarScreen = ({ route, navigation }) => {
             </View>
 
             <Calendar
-                current={selectedDate}
+                onMonthChange={(month) => {
+                    setCurrentMonth(month.month);
+                    setCurrentYear(month.year);
+                }}
                 onDayPress={(day) => setSelectedDate(day.dateString)}
                 markedDates={{ ...markedDates, [selectedDate]: { ...markedDates[selectedDate], selected: true, selectedColor: ABAETE_COLORS.primaryBlue } }}
                 theme={{ arrowColor: ABAETE_COLORS.primaryBlue, todayTextColor: ABAETE_COLORS.primaryBlue, textMonthFontFamily: FONT_FAMILY.Bold, textDayHeaderFontFamily: FONT_FAMILY.SemiBold }}
             />
 
             <View style={styles.listHeader}>
-                <Text style={styles.listTitle}>Agendamentos para {new Date(selectedDate).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}</Text>
+                <Text style={styles.listTitle}>Agendamentos para {new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}</Text>
             </View>
 
             {loading ? (
@@ -174,7 +264,7 @@ export const CalendarScreen = ({ route, navigation }) => {
                 <FlatList
                     data={appointmentsForSelectedDay}
                     keyExtractor={item => item.id}
-                    renderItem={({ item }) => <AppointmentItem item={item} navigation={navigation} professionalId={professionalId} />}
+                    renderItem={({ item }) => <AppointmentItem item={item} navigation={navigation} onCancelAppointment={handleCancelAppointment} />}
                     contentContainerStyle={styles.listContainer}
                     ListEmptyComponent={<Text style={styles.emptyText}>Nenhum agendamento para este dia.</Text>}
                 />
