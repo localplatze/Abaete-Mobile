@@ -13,6 +13,17 @@ import { getCachedUserData } from './../services/userCache';
 import { ref, onValue, get, query, orderByChild, equalTo, off, push, set as firebaseSet, remove } from 'firebase/database';
 import * as DocumentPicker from 'expo-document-picker';
 
+function createSafeFirebaseKeyFromDate(date) {
+    const pad = (num) => String(num).padStart(2, '0');
+    const year = date.getFullYear();
+    const month = pad(date.getMonth() + 1);
+    const day = pad(date.getDate());
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    const seconds = pad(date.getSeconds());
+    return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}`;
+}
+
 const getTodaysDateString = () => {
   const today = new Date();
   const day = String(today.getDate()).padStart(2, '0');
@@ -112,8 +123,13 @@ const ProfHomeAgendaContent = ({ navigation, professionalId }) => {
                     const appointmentDateTime = new Date(today);
                     appointmentDateTime.setHours(parseInt(hour), parseInt(minute), 0, 0);
 
-                    const exceptionKey = appointmentDateTime.toISOString().replace(/\./g, ',');
-                    if (schedule.exceptions?.cancelled?.[exceptionKey]) continue;
+                    const oldExceptionKey = appointmentDateTime.toISOString().replace(/\./g, ',');
+                    const newExceptionKey = createSafeFirebaseKeyFromDate(appointmentDateTime);
+                    
+                    const isCancelled = schedule.exceptions?.cancelled?.[oldExceptionKey];
+                    const isCompleted = schedule.exceptions?.completed?.[newExceptionKey];
+
+                    if (isCancelled || isCompleted) continue;
 
                     if (!patientDataCache[schedule.patientId]) {
                         const patientSnap = await get(ref(FIREBASE_DB, `users/${schedule.patientId}`));

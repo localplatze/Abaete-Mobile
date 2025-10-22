@@ -37,98 +37,103 @@ const ProgramTabs = ({ activePrograms, activeProgramId, onSelectProgram, onEndPr
 );
 
 const TargetTrialCard = ({ targetName, program, onRegisterTrial, detailedHelpLevels }) => {
-  const [trials, setTrials] = useState([]);
-  const [nextHelpLevelKey, setNextHelpLevelKey] = useState(program.helpLevels?.[0] || 'I'); // Chave do próximo nível
-  
-  const isHelpEnabled = program.programProgress?.currentPhase !== 'baseline';
+    const [trials, setTrials] = useState([]);
+    const isReduction = program.objective === 'Redução';
 
-  const addTrial = (status) => {
-    // Busca a pontuação com base na chave do nível de ajuda selecionado
-    const helpScore = isHelpEnabled ? (detailedHelpLevels[nextHelpLevelKey]?.score ?? 0) : 1.0; // Baseline é sempre 1.0 se correto
-    const isCorrect = status === '+';
+    // ---- Lógica para Aquisição ----
+    const [nextHelpLevelKey, setNextHelpLevelKey] = useState(program.helpLevels?.[0] || 'I');
+    const isHelpEnabled = program.programProgress?.currentPhase !== 'baseline';
 
-    const newTrial = {
-      id: `trial_${Date.now()}_${Math.random()}`,
-      status, // "+" ou "E"
-      helpUsed: isHelpEnabled ? nextHelpLevelKey : 'N/A',
-      // A pontuação final da tentativa é o score da ajuda se a resposta for correta, senão é 0.
-      score: isCorrect ? helpScore : 0.0,
-      timestamp: new Date().toISOString()
-    };
-    
-    const updatedTrials = [...trials, newTrial];
-    setTrials(updatedTrials);
-    onRegisterTrial(targetName, updatedTrials);
-  };
-
-  const removeTrial = (indexToRemove) => {
-    Alert.alert("Remover Tentativa", "Deseja remover este registro?", [
-      { text: "Cancelar", style: "cancel" },
-      { text: "Remover", style: "destructive", onPress: () => {
-        const updatedTrials = trials.filter((_, index) => index !== indexToRemove);
+    const addAcquisitionTrial = (status) => {
+        const helpScore = isHelpEnabled ? (detailedHelpLevels[nextHelpLevelKey]?.score ?? 1.0) : 1.0;
+        const isCorrect = status === '+';
+        const newTrial = {
+            id: `trial_${Date.now()}_${Math.random()}`, status,
+            helpUsed: isHelpEnabled ? nextHelpLevelKey : 'N/A',
+            score: isCorrect ? helpScore : 0.0,
+            timestamp: new Date().toISOString()
+        };
+        const updatedTrials = [...trials, newTrial];
         setTrials(updatedTrials);
         onRegisterTrial(targetName, updatedTrials);
-      }}
-    ]);
-  };
+    };
+    
+    const removeAcquisitionTrial = (indexToRemove) => {
+        Alert.alert("Remover Tentativa", "Deseja remover este registro?", [
+            { text: "Cancelar", style: "cancel" },
+            { text: "Remover", style: "destructive", onPress: () => {
+                const updatedTrials = trials.filter((_, index) => index !== indexToRemove);
+                setTrials(updatedTrials);
+                onRegisterTrial(targetName, updatedTrials);
+            }}
+        ]);
+    };
 
-  const minAttempts = program.targetsConfig?.minAttempts || 1;
+    // ---- Lógica para Redução ----
+    const addReductionEvent = () => {
+        const newEvent = { id: `event_${Date.now()}_${Math.random()}`, timestamp: new Date().toISOString() };
+        const updatedEvents = [...trials, newEvent];
+        setTrials(updatedEvents);
+        onRegisterTrial(targetName, updatedEvents);
+    };
 
-  // Filtra apenas os níveis de ajuda disponíveis para este programa
-  const availableHelpOptions = (program.helpLevels || []).map(key => ({ key, ...detailedHelpLevels[key] }));
+    const removeLastReductionEvent = () => {
+        if (trials.length === 0) return;
+        const updatedEvents = trials.slice(0, -1);
+        setTrials(updatedEvents);
+        onRegisterTrial(targetName, updatedEvents);
+    };
 
-  return (
-    <View style={styles.targetCard}>
-      <Text style={styles.targetCardTitle}>{targetName}</Text>
-      
-      {/* SEÇÃO DE ENTRADA DE DADOS */}
-      <View style={styles.trialInputSection}>
-        {isHelpEnabled ? (
-          <View style={styles.pickerContainerSmall}>
-            <Picker
-              selectedValue={nextHelpLevelKey}
-              onValueChange={(itemValue) => setNextHelpLevelKey(itemValue)}
-              enabled={isHelpEnabled}
-              style={{ height: 65 }}
-            >
-              {availableHelpOptions.map(level => 
-                <Picker.Item key={level.key} label={`${level.key} - ${level.name}`} value={level.key} />
-              )}
-            </Picker>
-          </View>
-        ) : (
-          <View style={styles.baselineHelpTextContainer}>
-             <Text style={styles.baselineHelpText}>Nenhum nível de ajuda aplicado (Linha de Base)</Text>
-          </View>
-        )}
-      </View>
-      
-      {/* Botões de Resposta (simplificados para correto/incorreto) */}
-      <View style={styles.trialButtons}>
-        <TouchableOpacity style={[styles.trialButton, styles.correctButton]} onPress={() => addTrial('+')}><Text style={styles.trialButtonText}>Correto (+)</Text></TouchableOpacity>
-        <TouchableOpacity style={[styles.trialButton, styles.incorrectButton]} onPress={() => addTrial('E')}><Text style={styles.trialButtonText}>Incorreto (E)</Text></TouchableOpacity>
-      </View>
-      
-      {/* Indicador de Tentativas Mínimas */}
-      <View style={styles.attemptTracker}>
-        <Text style={styles.attemptText}>Tentativas: {trials.length} / {minAttempts}</Text>
-        <View style={styles.attemptDotsContainer}>
-            {[...Array(minAttempts)].map((_, i) => <View key={i} style={[styles.attemptDot, i < trials.length && styles.attemptDotFilled]} />)}
+    // --- RENDERIZAÇÃO CONDICIONAL ---
+    if (isReduction) {
+        return (
+            <View style={styles.targetCard}>
+                <Text style={styles.targetCardTitle}>{targetName}</Text>
+                <View style={styles.reductionCounterContainer}>
+                    <TouchableOpacity style={styles.reductionButton} onPress={removeLastReductionEvent}>
+                        <MaterialIcons name="remove" size={32} color={ABAETE_COLORS.primaryBlue} />
+                    </TouchableOpacity>
+                    <Text style={styles.reductionCount}>{trials.length}</Text>
+                    <TouchableOpacity style={styles.reductionButton} onPress={addReductionEvent}>
+                        <MaterialIcons name="add" size={32} color={ABAETE_COLORS.primaryBlue} />
+                    </TouchableOpacity>
+                </View>
+                <Text style={styles.reductionLabel}>Contagem de Ocorrências</Text>
+            </View>
+        );
+    }
+
+    // --- RENDERIZAÇÃO PARA AQUISIÇÃO ---
+    const minAttempts = program.targetsConfig?.minAttempts || 1;
+    const availableHelpOptions = (program.helpLevels || []).map(key => ({ key, ...(detailedHelpLevels[key] || {name: 'N/A'}) }));
+    return (
+        <View style={styles.targetCard}>
+            <Text style={styles.targetCardTitle}>{targetName}</Text>
+            <View style={styles.trialInputSection}>
+                {isHelpEnabled ? (
+                    <View style={styles.pickerContainerSmall}>
+                        <Picker selectedValue={nextHelpLevelKey} onValueChange={(itemValue) => setNextHelpLevelKey(itemValue)} style={{ height: 65 }}>
+                            {availableHelpOptions.map(level => <Picker.Item key={level.key} label={`${level.key} - ${level.name}`} value={level.key} />)}
+                        </Picker>
+                    </View>
+                ) : <View style={styles.baselineHelpTextContainer}><Text style={styles.baselineHelpText}>Nenhum nível de ajuda aplicado (Linha de Base)</Text></View>}
+            </View>
+            <View style={styles.trialButtons}>
+                <TouchableOpacity style={[styles.trialButton, styles.correctButton]} onPress={() => addAcquisitionTrial('+')}><Text style={styles.trialButtonText}>Correto (+)</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.trialButton, styles.incorrectButton]} onPress={() => addAcquisitionTrial('E')}><Text style={styles.trialButtonText}>Incorreto (E)</Text></TouchableOpacity>
+            </View>
+            <View style={styles.attemptTracker}><Text style={styles.attemptText}>Tentativas: {trials.length} / {minAttempts}</Text></View>
+            <View style={styles.trialsLog}>
+                {trials.map((trial, index) => (
+                    <TouchableOpacity key={trial.id} onLongPress={() => removeAcquisitionTrial(index)} style={styles.trialLogItemContainer}>
+                        <Text style={styles.trialLogStatus}>{trial.status}</Text>
+                        <Text style={styles.trialLogHelp}>({detailedHelpLevels[trial.helpUsed]?.name || trial.helpUsed})</Text>
+                        <Text style={styles.trialLogScore}>Pontos: {trial.score.toFixed(2)}</Text>
+                    </TouchableOpacity>
+                ))}
+            </View>
         </View>
-      </View>
-
-      {/* LOG DE TENTATIVAS */}
-      <View style={styles.trialsLog}>
-        {trials.map((trial, index) => (
-          <TouchableOpacity key={trial.id} onLongPress={() => removeTrial(index)} style={styles.trialLogItemContainer}>
-            <Text style={styles.trialLogStatus}>{trial.status}</Text>
-            <Text style={styles.trialLogHelp}>({detailedHelpLevels[trial.helpUsed]?.name || trial.helpUsed})</Text>
-            <Text style={styles.trialLogScore}>Pontos: {trial.score.toFixed(2)}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </View>
-  );
+    );
 };
 
 const ProgramSelectionStep = ({ patientName, availablePrograms, onStartSession, loading }) => {
@@ -199,12 +204,62 @@ export const NewAbaScreen = ({ route, navigation }) => {
     const [activePrograms, setActivePrograms] = useState([]);
     const [activeProgramId, setActiveProgramId] = useState(null);
     const [loading, setLoading] = useState(true);
+
+    const getNextPhase = (currentPhase, program) => {
+        const phaseOrder = ['baseline', 'intervention', 'maintenance', 'generalization'];
+        const currentIndex = phaseOrder.indexOf(currentPhase);
+        for (let i = currentIndex + 1; i < phaseOrder.length; i++) {
+            const nextPhaseKey = phaseOrder[i];
+            if (program[nextPhaseKey]?.enabled) return nextPhaseKey;
+        }
+        return 'completed';
+    };
+
+    const evaluateAndProgress = (program, newSessionResult, currentProgress) => {
+        let updatedProgress = JSON.parse(JSON.stringify(currentProgress));
+        if (!Array.isArray(updatedProgress.sessionHistory)) updatedProgress.sessionHistory = [];
+        
+        updatedProgress.sessionHistory.unshift(newSessionResult);
+
+        const currentPhaseKey = updatedProgress.currentPhase;
+        const criteria = program[currentPhaseKey];
+        if (!criteria?.enabled || !criteria.sessions) {
+            return { progress: updatedProgress, decision: 'continue' };
+        }
+
+        const sessionsInPhase = updatedProgress.sessionHistory.filter(s => s.phase === currentPhaseKey);
+        if (sessionsInPhase.length < criteria.sessions) {
+            return { progress: updatedProgress, decision: 'continue' };
+        }
+
+        const recentSessions = sessionsInPhase.slice(0, criteria.sessions);
+        let criteriaMet = false;
+
+        if (program.objective === 'Aquisição') {
+            const requiredAccuracy = criteria.successPercentage || 80;
+            criteriaMet = recentSessions.every(session => session.accuracy >= requiredAccuracy);
+        } else { // Redução
+            const maxCount = criteria.maxCount ?? 0;
+            criteriaMet = recentSessions.every(session => session.count <= maxCount);
+        }
+
+        if (criteriaMet) {
+            const nextPhase = getNextPhase(currentPhaseKey, program);
+            if (program.autoProgression) {
+                updatedProgress.currentPhase = nextPhase;
+            }
+            return { progress: updatedProgress, decision: 'success', nextPhase };
+        } else {
+            return { progress: updatedProgress, decision: 'failure' };
+        }
+    };
     
     // Estados para coletar dados da sessão
     const [sessionStartTime, setSessionStartTime] = useState(null); // Guarda o momento em que a sessão REALMENTE começou
     const [sessionTrialData, setSessionTrialData] = useState({}); // Guarda os dados das tentativas
     const [completedProgramData, setCompletedProgramData] = useState({}); // Guarda os resultados de programas já finalizados
     const [isSaving, setIsSaving] = useState(false);
+    const [sessionId, setSessionId] = useState(null); 
     
     const [detailedHelpLevels, setDetailedHelpLevels] = useState({});
 
@@ -238,10 +293,13 @@ export const NewAbaScreen = ({ route, navigation }) => {
     const handleStartSession = (selectedPrograms) => {
         if (selectedPrograms.length === 0) return;
         
-        setSessionStartTime(new Date()); // Apenas marca o tempo de início
+        // Gera um ID único para esta "sessão-mãe" que agrupará os programas
+        setSessionId(`session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+
+        setSessionStartTime(new Date());
         setActivePrograms(selectedPrograms);
         setActiveProgramId(selectedPrograms[0].id);
-        setStep('session_execution'); // Simplesmente muda a tela, sem DB
+        setStep('session_execution');
     };
 
     const handleRegisterTrial = useCallback((programId, targetName, trials) => {
@@ -260,106 +318,103 @@ export const NewAbaScreen = ({ route, navigation }) => {
         ]);
     };
 
-    const finalizeProgram = (programIdToFinalize) => {
+    const finalizeProgram = async (programIdToFinalize) => {
+        if (isSaving) return;
+        setIsSaving(true);
+
         const program = activePrograms.find(p => p.id === programIdToFinalize);
         const programTrials = sessionTrialData[programIdToFinalize] || {};
         
-        // Calcula a acurácia para este programa
-        let totalScore = 0, totalTrials = 0;
-        Object.values(programTrials).forEach(trials => {
-            trials.forEach(trial => { totalScore += trial.score; totalTrials++; });
-        });
-        const accuracy = totalTrials > 0 ? Math.round((totalScore / totalTrials) * 100) : 0;
-        
-        // Guarda os dados finalizados deste programa no estado
-        setCompletedProgramData(prev => ({
-            ...prev,
-            [programIdToFinalize]: {
-                accuracy,
-                phaseConducted: program.programProgress.currentPhase,
-                programId: program.id,
-                programName: program.name,
-                trialsData: Object.entries(programTrials).map(([targetKey, attempts]) => ({ 
-                    target: targetKey.replace(/_/g, ' '), 
-                    attempts 
-                })),
-            }
-        }));
-
-        // Remove o programa da lista ativa
-        const remainingPrograms = activePrograms.filter(p => p.id !== programIdToFinalize);
-        setActivePrograms(remainingPrograms);
-
-        if (remainingPrograms.length > 0) {
-            setActiveProgramId(remainingPrograms[0].id);
-        } else {
-            // Se foi o último, aciona o salvamento final de toda a sessão
-            saveEntireSession();
-        }
-    };
-    
-    const saveEntireSession = async () => {
-        if (isSaving) return;
-        setIsSaving(true);
-        
-        // Agrupa os dados de todos os programas finalizados
-        const finalAbaData = Object.values(completedProgramData);
-
-        // Se nenhum dado foi coletado, não salva nada
-        if (finalAbaData.length === 0) {
-            Alert.alert("Atenção", "Nenhuma tentativa foi registrada. A sessão não será salva.", [
-                { text: "OK", onPress: () => navigation.goBack() }
-            ]);
-            setIsSaving(false);
-            return;
+        // 1. Coleta o resultado da sessão (acurácia OU contagem)
+        let sessionResultData = {};
+        if (program.objective === 'Aquisição') {
+            let totalScore = 0, totalTrials = 0;
+            Object.values(programTrials).forEach(trials => {
+                trials.forEach(trial => { totalScore += trial.score; totalTrials++; });
+            });
+            const accuracy = totalTrials > 0 ? Math.round((totalScore / totalTrials) * 100) : 0;
+            sessionResultData = { accuracy };
+        } else { // Redução
+            let totalCount = 0;
+            Object.values(programTrials).forEach(events => { totalCount += events.length; });
+            sessionResultData = { count: totalCount };
         }
 
-        const endTime = new Date();
-        const durationMinutes = Math.round((endTime.getTime() - sessionStartTime.getTime()) / 60000);
-        
-        // Pega a acurácia média de todos os programas aplicados
-        const overallAccuracy = Math.round(finalAbaData.reduce((sum, prog) => sum + prog.accuracy, 0) / finalAbaData.length);
-
-        const finalAppointment = {
-            patientId, professionalId,
-            dateTimeStart: sessionStartTime.toISOString(),
-            dateTimeEnd: endTime.toISOString(),
-            durationMinutes,
-            status: 'completed',
-            type: 'Sessão ABA',
-            createdAt: new Date().toISOString(),
-            createdBy: professionalId,
-            // O abaData agora pode conter múltiplos programas
-            abaData: {
-                accuracy: overallAccuracy,
-                sessionNotes: '', // Adicionar um campo de notas gerais se desejar
-                programs: finalAbaData, // Array com os resultados de cada programa
-            }
+        const newSessionEntry = {
+            date: new Date().toISOString(),
+            phase: program.programProgress.currentPhase,
+            ...sessionResultData,
         };
 
-        try {
-            // A ÚNICA operação de escrita no Firebase
-            await push(ref(FIREBASE_DB, 'appointments'), finalAppointment);
+        // 2. Avalia o progresso
+        const { progress: newProgress, decision, nextPhase } = evaluateAndProgress(program, newSessionEntry, program.programProgress);
 
-            // Adiciona a exceção na regra de 'schedules' para invalidar o agendamento virtual
+        try {
+            // 3. Salva o novo estado de progresso do paciente
+            await set(ref(FIREBASE_DB, `users/${patientId}/programProgress/${programIdToFinalize}`), newProgress);
+
+            // 4. CRIA O REGISTRO DE APPOINTMENT INDIVIDUAL E COMPLETO
+            const endTime = new Date();
+            const durationMinutes = Math.round((endTime.getTime() - sessionStartTime.getTime()) / 60000);
+            
+            const finalAppointmentData = {
+                patientId, professionalId, sessionId, // <-- sessionId adicionado
+                dateTimeStart: sessionStartTime.toISOString(),
+                dateTimeEnd: endTime.toISOString(),
+                durationMinutes,
+                status: 'completed',
+                type: 'Sessão ABA',
+                createdAt: endTime.toISOString(),
+                createdBy: professionalId,
+                fromScheduleId: initialAppointmentData.isVirtual ? initialAppointmentData.id.split('_')[0] : null,
+                abaData: {
+                    ...sessionResultData, // Adiciona accuracy ou count
+                    phaseConducted: program.programProgress.currentPhase,
+                    programId: program.id,
+                    programName: program.name,
+                    trialsData: Object.entries(programTrials).map(([targetKey, attempts]) => ({ 
+                        target: targetKey.replace(/_/g, ' '), 
+                        attempts 
+                    })),
+                }
+            };
+            await push(ref(FIREBASE_DB, 'appointments'), finalAppointmentData);
+
+            // 5. Se veio de uma regra 'schedules', marca a ocorrência como concluída/processada
             if (initialAppointmentData.isVirtual) {
                 const [scheduleId, timestamp] = initialAppointmentData.id.split('_');
                 const originalDateTime = new Date(parseInt(timestamp));
-                const exceptionKey = createSafeFirebaseKeyFromDate(originalDateTime); // Use a função auxiliar que criamos
-                await set(ref(FIREBASE_DB, `schedules/${scheduleId}/exceptions/cancelled/${exceptionKey}`), true);
+                // Usamos uma chave segura para o nó de exceções
+                const exceptionKey = createSafeFirebaseKeyFromDate(originalDateTime);
+                await set(ref(FIREBASE_DB, `schedules/${scheduleId}/exceptions/completed/${exceptionKey}`), true);
             }
             
-            Alert.alert("Sessão Salva", "Todos os dados da sessão foram salvos com sucesso.", [
-                { text: "OK", onPress: () => navigation.goBack() }
+            // 6. Remove o programa da lista ativa na UI
+            const remainingPrograms = activePrograms.filter(p => p.id !== programIdToFinalize);
+            setActivePrograms(remainingPrograms);
+
+            // 7. Mostra o diálogo para o profissional
+            Alert.alert("Programa Salvo!", `O progresso para "${program.name}" foi salvo com sucesso.`, [
+                { text: "OK" }
             ]);
+
+            if (remainingPrograms.length > 0) {
+                setActiveProgramId(remainingPrograms[0].id);
+            } else {
+                // Se foi o último programa, avisa e volta para a tela anterior
+                Alert.alert("Sessão Finalizada", "Todos os programas selecionados foram concluídos.", [
+                    { text: "OK", onPress: () => navigation.goBack() }
+                ]);
+            }
+            
         } catch (error) {
-            console.error("Erro ao salvar sessão:", error);
-            Alert.alert("Erro", "Não foi possível salvar a sessão.");
+            console.error("Erro ao finalizar programa:", error);
+            Alert.alert("Erro", "Não foi possível salvar o progresso do programa.");
         } finally {
             setIsSaving(false);
         }
     };
-
+    
     // ----- RENDERIZAÇÃO -----
     
     if (step === 'program_selection') {
@@ -429,6 +484,13 @@ export const NewAbaScreen = ({ route, navigation }) => {
                                     detailedHelpLevels={detailedHelpLevels} 
                                 />
                             ))}
+                            <TouchableOpacity 
+                                style={[styles.buttonPrimary, {marginTop: 30, backgroundColor: ABAETE_COLORS.successGreen}]} 
+                                onPress={() => handleEndProgram(currentProgram.id)} 
+                                disabled={isSaving}
+                            >
+                                <Text style={styles.buttonText}>Finalizar e Salvar Programa</Text>
+                            </TouchableOpacity>
                         </View>
                     ) : (
                         <View style={styles.centered}>
@@ -745,5 +807,34 @@ const styles = StyleSheet.create({
     height: 20,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  reductionCounterContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 10,
+  },
+  reductionButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: ABAETE_COLORS.primaryBlueLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  reductionCount: {
+    fontFamily: FONT_FAMILY.Bold,
+    fontSize: 48,
+    color: ABAETE_COLORS.textPrimary,
+    marginHorizontal: 30,
+    minWidth: 60,
+    textAlign: 'center',
+  },
+  reductionLabel: {
+    fontFamily: FONT_FAMILY.Regular,
+    fontSize: 14,
+    color: ABAETE_COLORS.textSecondary,
+    textAlign: 'center',
+    marginTop: 5,
   },
 });

@@ -17,6 +17,17 @@ LocaleConfig.locales['pt-br'] = {
 };
 LocaleConfig.defaultLocale = 'pt-br';
 
+function createSafeFirebaseKeyFromDate(date) {
+    const pad = (num) => String(num).padStart(2, '0');
+    const year = date.getFullYear();
+    const month = pad(date.getMonth() + 1);
+    const day = pad(date.getDate());
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    const seconds = pad(date.getSeconds());
+    return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}`;
+}
+
 const AppointmentItem = ({ item, navigation, professionalId, onCancelAppointment }) => {
     const [patientName, setPatientName] = useState('Carregando...');
 
@@ -141,27 +152,31 @@ export const CalendarScreen = ({ route, navigation }) => {
                                 const [hour, minute] = time.split(':');
                                 const appDateTime = new Date(day);
                                 appDateTime.setHours(parseInt(hour), parseInt(minute), 0, 0);
-                                const exceptionKey = appDateTime.toISOString().replace(/\./g, ',');
+                                const oldExceptionKey = appDateTime.toISOString().replace(/\./g, ',');
+                                const newExceptionKey = createSafeFirebaseKeyFromDate(appDateTime);
+                                
+                                const isCancelled = rule.exceptions?.cancelled?.[oldExceptionKey];
+                                const isCompleted = rule.exceptions?.completed?.[newExceptionKey];
 
-                                if (!rule.exceptions?.cancelled?.[exceptionKey]) {
-                                    const dateStr = day.toISOString().split('T')[0];
-                                    if (!generatedAppointments[dateStr]) generatedAppointments[dateStr] = [];
-                                    
-                                    if (!patientCache[rule.patientId]) {
-                                        const user = await getCachedUserData(rule.patientId);
-                                        patientCache[rule.patientId] = user.displayName;
-                                    }
+                                if (isCancelled || isCompleted) continue;
 
-                                    generatedAppointments[dateStr].push({
-                                        id: `${rule.id}_${appDateTime.getTime()}`,
-                                        isVirtual: true, // Identifica que veio de uma regra
-                                        ...rule,
-                                        patientName: patientCache[rule.patientId],
-                                        dateTimeStart: appDateTime.toISOString(),
-                                        status: 'scheduled'
-                                    });
-                                    marks[dateStr] = { marked: true, dotColor: ABAETE_COLORS.primaryBlue };
+                                const dateStr = day.toISOString().split('T')[0];
+                                if (!generatedAppointments[dateStr]) generatedAppointments[dateStr] = [];
+                                
+                                if (!patientCache[rule.patientId]) {
+                                    const user = await getCachedUserData(rule.patientId);
+                                    patientCache[rule.patientId] = user.displayName;
                                 }
+
+                                generatedAppointments[dateStr].push({
+                                    id: `${rule.id}_${appDateTime.getTime()}`,
+                                    isVirtual: true,
+                                    ...rule,
+                                    patientName: patientCache[rule.patientId],
+                                    dateTimeStart: appDateTime.toISOString(),
+                                    status: 'scheduled'
+                                });
+                                marks[dateStr] = { marked: true, dotColor: ABAETE_COLORS.primaryBlue };
                             }
                         }
                     }

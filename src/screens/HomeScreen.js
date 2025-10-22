@@ -11,13 +11,16 @@ import {
   ActivityIndicator,
   FlatList,
   TextInput,
-  Keyboard,
+  Keyboard, Modal
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { ref, onValue, query, orderByChild, equalTo, get, push, set as firebaseSet, remove } from 'firebase/database';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
+import { Video } from 'expo-av';
+import { LineChart } from "react-native-gifted-charts";
+import { Picker } from '@react-native-picker/picker';
 
 import { FIREBASE_AUTH, FIREBASE_DB } from '../services/firebaseConnection';
 import { ABAETE_COLORS } from '../constants/Colors';
@@ -31,104 +34,116 @@ LocaleConfig.defaultLocale = 'pt-br';
 
 const timeAgo = (dateStr) => { if (!dateStr) return ''; const date = new Date(dateStr); const seconds = Math.floor((new Date() - date) / 1000); let interval = seconds / 31536000; if (interval > 1) return `Há ${Math.floor(interval)} anos`; interval = seconds / 2592000; if (interval > 1) return `Há ${Math.floor(interval)} meses`; interval = seconds / 86400; if (interval > 1) return `Há ${Math.floor(interval)} dias`; interval = seconds / 3600; if (interval > 1) return `Há ${Math.floor(interval)} horas`; interval = seconds / 60; if (interval > 1) return `Há ${Math.floor(interval)} minutos`; return "Agora"; };
 
+function createSafeFirebaseKeyFromDate(date) {
+    const pad = (num) => String(num).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+}
 
 // --- COMPONENTES DAS ABAS ---
 
 const HomeContent = ({ patient }) => {
-  const [appointments, setAppointments] = useState([]);
-  const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!patient?.id) { setLoading(false); return; }
-    const now = new Date().toISOString();
-    const appointmentsRef = query(ref(FIREBASE_DB, 'appointments'), orderByChild('patientId'), equalTo(patient.id));
-    const tasksRef = query(ref(FIREBASE_DB, 'homeworkTasks'), orderByChild('patientId'), equalTo(patient.id));
-    
-    const unsubscribeApps = onValue(appointmentsRef, snapshot => {
-      const futureApps = [];
-      snapshot.forEach(child => { const app = child.val(); if (app.dateTimeStart > now && app.status === 'scheduled') futureApps.push({ id: child.key, ...app }); });
-      setAppointments(futureApps.sort((a, b) => new Date(a.dateTimeStart) - new Date(b.dateTimeStart)));
-      setLoading(false);
-    });
-
-    const unsubscribeTasks = onValue(tasksRef, snapshot => {
-      const pendingTasks = [];
-      snapshot.forEach(child => { const task = child.val(); if (task.status === 'pending_responsible') pendingTasks.push({ id: child.key, ...task }); });
-      setTasks(pendingTasks);
-    });
-
-    return () => { unsubscribeApps(); unsubscribeTasks(); };
-  }, [patient?.id]);
-
-  if (loading) return <ActivityIndicator style={{ marginTop: 40 }} size="large" color={ABAETE_COLORS.primaryBlue} />;
-
-  return (
-    <ScrollView style={styles.contentScrollViewClean} contentContainerStyle={styles.contentContainerClean} showsVerticalScrollIndicator={false}>
-      <Text style={styles.greetingTextClean}>Olá, <Text style={{ fontFamily: FONT_FAMILY.Bold }}>{patient.displayName.split(' ')[0]}!</Text></Text>
-      <Text style={styles.subGreetingText}>Que bom te ver por aqui.</Text>
-      
-      <View style={styles.sectionContainer}>
-        <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Próximos Agendamentos</Text></View>
-        {appointments.length > 0 ? appointments.slice(0, 2).map(evento => (
-          <TouchableOpacity key={evento.id} style={styles.eventCardClean}>
-            <View style={styles.eventIconContainer}><MaterialIcons name="event" size={24} color={ABAETE_COLORS.primaryBlue} /></View>
-            <View style={styles.eventDetails}><Text style={styles.eventTitle}>{evento.type}</Text><Text style={styles.eventTime}>{new Date(evento.dateTimeStart).toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: 'short'})} às {new Date(evento.dateTimeStart).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</Text></View>
-          </TouchableOpacity>
-        )) : <Text style={styles.emptySectionText}>Nenhum agendamento futuro.</Text>}
-      </View>
-      
-      {tasks.length > 0 && (
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Atividades para Casa</Text></View>
-          {tasks.map(tarefa => (
-            <TouchableOpacity key={tarefa.id} style={styles.taskCardClean}>
-              <View style={[styles.infoIconContainer, { backgroundColor: ABAETE_COLORS.yellowOpaco }]}><MaterialIcons name="home-work" size={24} color={ABAETE_COLORS.yellowDark} /></View>
-              <View style={styles.infoTextContainer}><Text style={styles.infoCardTitle}>{tarefa.title}</Text><Text style={styles.infoCardDetail}>Prazo: {new Date(tarefa.dueDate).toLocaleDateString('pt-BR')}</Text></View>
-              <View style={styles.taskStatusIndicator} />
-            </TouchableOpacity>
-          ))}
+    return (
+        <View style={{flex: 1}}>
+            <AgendaContent patientId={patient.id} showCalendar={false} />
         </View>
-      )}
-    </ScrollView>
-  );
+    );
 };
 
-const AgendaContent = ({ patientId }) => {
+const AgendaContent = ({ patientId, showCalendar = true }) => {
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-    const [appointments, setAppointments] = useState({});
-    const [markedDates, setMarkedDates] = useState({});
+    const [currentMonth, setCurrentMonth] = useState(new Date().getMonth() + 1);
+    const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+    
+    // O estado agora é um único objeto que guarda os agendamentos virtuais e as marcações
+    const [calendarData, setCalendarData] = useState({ appointmentsByDate: {}, markedDates: {} });
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const appointmentsRef = query(ref(FIREBASE_DB, 'appointments'), orderByChild('patientId'), equalTo(patientId));
-        const unsubscribe = onValue(appointmentsRef, snapshot => {
-            const fetchedAppointments = {}; const marks = {};
-            snapshot.forEach(child => {
-                const app = { id: child.key, ...child.val() };
-                const dateStr = new Date(app.dateTimeStart).toISOString().split('T')[0];
-                if (!fetchedAppointments[dateStr]) fetchedAppointments[dateStr] = [];
-                fetchedAppointments[dateStr].push(app);
-                marks[dateStr] = { marked: true, dotColor: ABAETE_COLORS.primaryBlue };
-            });
-            setAppointments(fetchedAppointments); setMarkedDates(marks); setLoading(false);
+        if (!patientId) return;
+
+        const schedulesRef = query(ref(FIREBASE_DB, 'schedules'), orderByChild('patientId'), equalTo(patientId));
+        
+        const unsubscribe = onValue(schedulesRef, (snapshot) => {
+            setLoading(true);
+            const schedules = snapshot.exists() ? snapshot.val() : {};
+            const generatedAppointments = {};
+            const marks = {};
+
+            const startOfMonth = new Date(currentYear, currentMonth - 1, 1);
+            const endOfMonth = new Date(currentYear, currentMonth, 0);
+
+            for (const scheduleId in schedules) {
+                const rule = { id: scheduleId, ...schedules[scheduleId] };
+                for (let day = new Date(startOfMonth); day <= endOfMonth; day.setDate(day.getDate() + 1)) {
+                    // Proteção contra datas inválidas na regra
+                    if (!rule.startDate || !rule.endDate || isNaN(new Date(rule.startDate)) || isNaN(new Date(rule.endDate))) continue;
+
+                    if (day >= new Date(rule.startDate + 'T00:00:00') && day <= new Date(rule.endDate + 'T23:59:59')) {
+                        const dayOfWeek = day.getDay();
+                        const timetableForDay = Array.isArray(rule.weeklyTimetable) ? rule.weeklyTimetable[dayOfWeek] : rule.weeklyTimetable[dayOfWeek.toString()];
+                        
+                        if (timetableForDay) {
+                            for (const time of timetableForDay) {
+                                const [hour, minute] = time.split(':');
+                                const appDateTime = new Date(day);
+                                appDateTime.setHours(parseInt(hour), parseInt(minute), 0, 0);
+                                
+                                const oldExceptionKey = appDateTime.toISOString().replace(/\./g, ',');
+                                const newExceptionKey = createSafeFirebaseKeyFromDate(appDateTime);
+
+                                if (rule.exceptions?.cancelled?.[oldExceptionKey] || rule.exceptions?.completed?.[newExceptionKey]) continue;
+
+                                const dateStr = day.toISOString().split('T')[0];
+                                if (!generatedAppointments[dateStr]) generatedAppointments[dateStr] = [];
+                                
+                                generatedAppointments[dateStr].push({
+                                    id: `${rule.id}_${appDateTime.getTime()}`,
+                                    dateTimeStart: appDateTime.toISOString(),
+                                    type: rule.type,
+                                    // Adicione outros dados da regra se precisar
+                                });
+                                marks[dateStr] = { marked: true, dotColor: ABAETE_COLORS.primaryBlue };
+                            }
+                        }
+                    }
+                }
+            }
+
+            setCalendarData({ appointmentsByDate: generatedAppointments, markedDates: marks });
+            setLoading(false);
         });
+
         return () => unsubscribe();
-    }, [patientId]);
+    }, [patientId, currentMonth, currentYear]);
     
-    const appointmentsForSelectedDay = appointments[selectedDate] || [];
+    // Usa os dados do estado `calendarData`
+    const appointmentsForSelectedDay = calendarData.appointmentsByDate[selectedDate] || [];
+    const displayDate = new Date(selectedDate + 'T12:00:00'); 
 
     return (
         <View style={styles.contentAreaClean}>
-            <Text style={styles.pageTitleClean}>Agenda</Text>
-            <Calendar onDayPress={(day) => setSelectedDate(day.dateString)} markedDates={{ ...markedDates, [selectedDate]: { ...markedDates[selectedDate], selected: true, selectedColor: ABAETE_COLORS.primaryBlue } }} theme={{ arrowColor: ABAETE_COLORS.primaryBlue }}/>
-            <Text style={styles.listHeader}>Agendamentos para {new Date(selectedDate).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}</Text>
+            {showCalendar && <Text style={styles.pageTitleClean}>Agenda</Text>}
+            {showCalendar && (
+                <Calendar
+                    onMonthChange={(month) => {
+                        setCurrentMonth(month.month);
+                        setCurrentYear(month.year);
+                    }}
+                    onDayPress={(day) => setSelectedDate(day.dateString)}
+                    markedDates={{ ...calendarData.markedDates, [selectedDate]: { ...(calendarData.markedDates[selectedDate] || {}), selected: true, selectedColor: ABAETE_COLORS.primaryBlue } }}
+                    theme={{ arrowColor: ABAETE_COLORS.primaryBlue }}
+                />
+            )}
+            <Text style={styles.listHeader}>{showCalendar ? `Agendamentos para ${displayDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}` : "Sessões de Hoje"}</Text>
             {loading ? <ActivityIndicator/> : 
             <FlatList data={appointmentsForSelectedDay} keyExtractor={item => item.id}
                 renderItem={({ item }) => (
                     <View style={styles.eventCardClean}>
                         <View style={styles.eventIconContainer}><MaterialIcons name="event" size={24} color={ABAETE_COLORS.primaryBlue} /></View>
-                        <View style={styles.eventDetails}><Text style={styles.eventTitle}>{item.type}</Text><Text style={styles.eventTime}>{new Date(item.dateTimeStart).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</Text></View>
+                        <View style={styles.eventDetails}>
+                            <Text style={styles.eventTitle}>{item.type}</Text>
+                            <Text style={styles.eventTime}>{new Date(item.dateTimeStart).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</Text>
+                        </View>
                     </View>
                 )}
                 ListEmptyComponent={<Text style={styles.emptySectionText}>Nenhum agendamento neste dia.</Text>}
@@ -145,27 +160,183 @@ const phaseTranslations = {
     'Não iniciada': 'Não iniciada' // Para o caso padrão
 };
 
-const ProgressoContent = ({ patient }) => {
-    const programs = patient.assignedPrograms ? Object.values(patient.assignedPrograms) : [];
-    return (
-        <View style={styles.contentAreaClean}>
-            <Text style={styles.pageTitleClean}>Meus Programas</Text>
-            {programs.length === 0 ? <Text style={styles.emptySectionText}>Nenhum programa de desenvolvimento ativo.</Text> :
-                <FlatList data={programs} keyExtractor={item => item.templateId} renderItem={({item}) => {
-                    const phaseKey = patient.programProgress?.[item.templateId]?.currentPhase || 'Não iniciada';
-                    const phaseText = phaseTranslations[phaseKey] || phaseKey; // Usa a tradução ou a chave original
+const PHASE_ORDER = ['baseline', 'intervention', 'maintenance', 'generalization'];
+const PHASE_COLORS = {
+    baseline: { bg: 'rgba(254, 226, 226, 0.7)', border: '#F87171' },
+    intervention: { bg: 'rgba(254, 249, 195, 0.7)', border: '#FBBF24' },
+    maintenance: { bg: 'rgba(221, 237, 254, 0.7)', border: '#367BF5' },
+    generalization: { bg: 'rgba(222, 247, 236, 0.7)', border: '#34D399' }
+};
 
-                    return (
-                        <View style={styles.programCard}>
-                            <View style={{flex: 1}}>
-                                <Text style={styles.programTitle}>{item.name}</Text>
-                                <Text style={styles.programPhase}>Fase Atual: <Text style={{fontFamily: FONT_FAMILY.SemiBold}}>{phaseText}</Text></Text>
-                            </View>
-                        </View>
-                    );
-                }} />
+const ProgressChart = ({ chartData }) => {
+    // Se não houver dados suficientes, mostra uma mensagem
+    if (!chartData || chartData.length < 2) {
+        return (
+            <View style={styles.emptyChartContainer}>
+                <MaterialIcons name="insights" size={48} color={ABAETE_COLORS.lightGray} />
+                <Text style={styles.emptyTabText}>Dados insuficientes para gerar o gráfico.</Text>
+            </View>
+        );
+    }
+    
+    // Hook para processar os dados e preparar as anotações do gráfico
+    const chartProps = useMemo(() => {
+        const sections = [];
+        const verticalLines = [];
+        const labels = chartData.map(d => d.label);
+        const specialLabelIndices = {};
+
+        let lastPhase = null;
+        let startIndex = 0;
+
+        chartData.forEach((point, index) => {
+            if (point.phase !== lastPhase) {
+                if (lastPhase !== null) {
+                    // Adiciona a seção de fundo da fase anterior
+                    sections.push({
+                        color: PHASE_COLORS[lastPhase]?.bg || 'transparent',
+                        startValue: startIndex,
+                        endValue: index - 1,
+                    });
+                    // Adiciona a linha divisória vertical entre as fases
+                    verticalLines.push({ index: index - 1, color: ABAETE_COLORS.lightGray, dash: [5, 5] });
+                }
+                // Calcula o índice do meio do bloco da fase anterior para posicionar o rótulo
+                const middleIndex = startIndex + Math.floor((index - 1 - startIndex) / 2);
+                if (lastPhase) specialLabelIndices[middleIndex] = phaseTranslations[lastPhase];
+                
+                startIndex = index;
+                lastPhase = point.phase;
             }
-        </View>
+        });
+        // Adiciona a última seção e o último rótulo
+        sections.push({ color: PHASE_COLORS[lastPhase]?.bg || 'transparent', startValue: startIndex, endValue: chartData.length - 1 });
+        const lastMiddleIndex = startIndex + Math.floor((chartData.length - 1 - startIndex) / 2);
+        if (lastPhase) specialLabelIndices[lastMiddleIndex] = phaseTranslations[lastPhase];
+
+        return { sections, verticalLines, labels, specialLabelIndices };
+    }, [chartData]);
+    
+    return (
+        <LineChart
+            data={chartData}
+            height={220}
+            color={ABAETE_COLORS.primaryBlue}
+            thickness={3}
+            curved
+            spacing={60} // Espaçamento entre os pontos de dados
+            initialSpacing={10}
+            // --- Eixo Y ---
+            yAxisLabelSuffix="%"
+            yAxisTextStyle={{ color: ABAETE_COLORS.textSecondary }}
+            yAxisOffset={0} // Garante que comece no 0
+            maxValue={100}
+            noOfSections={5} // Linhas horizontais (0, 20, 40, 60, 80, 100)
+            // --- Eixo X Customizado ---
+            xAxisLabelComponent={(index) => (
+                <View style={{ width: 60, marginLeft: index === 0 ? -15 : 0 }}>
+                    {/* Linha 1: Data */}
+                    <Text style={{ color: ABAETE_COLORS.textSecondary, textAlign: 'center', fontSize: 12 }}>{chartProps.labels[index]}</Text>
+                    {/* Linha 2: Nome da Fase (renderizado condicionalmente) */}
+                    {chartProps.specialLabelIndices[index] && (
+                        <Text style={{ color: ABAETE_COLORS.primaryBlue, textAlign: 'center', fontSize: 12, fontFamily: FONT_FAMILY.SemiBold, marginTop: 4 }}>
+                            {chartProps.specialLabelIndices[index]}
+                        </Text>
+                    )}
+                </View>
+            )}
+            xAxisLabelsHeight={40} // Aumenta a altura para caber o nome da fase
+            // --- Fundo e Divisórias ---
+            rulesColor={ABAETE_COLORS.lightGray}
+            showXAxisIndices={false} // Esconde os índices padrão do eixo X
+            sections={chartProps.sections}
+            verticalLines={chartProps.verticalLines}
+            // --- Pontos de Dados ---
+            dataPointsColor={ABAETE_COLORS.primaryBlue}
+            dataPointsRadius={4}
+        />
+    );
+};
+
+const ProgressoContent = ({ patient }) => {
+    const [allSessions, setAllSessions] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [selectedProgramId, setSelectedProgramId] = useState('');
+    const availablePrograms = patient.assignedPrograms ? Object.values(patient.assignedPrograms) : [];
+
+    useEffect(() => {
+        if (availablePrograms.length > 0 && !selectedProgramId) {
+            setSelectedProgramId(availablePrograms[0].id);
+        }
+        const appointmentsRef = query(ref(FIREBASE_DB, 'appointments'), orderByChild('patientId'), equalTo(patient.id));
+        const unsubscribe = onValue(appointmentsRef, (snapshot) => {
+            const completedSessions = [];
+            if (snapshot.exists()) {
+                snapshot.forEach(child => {
+                    const app = { id: child.key, ...child.val() };
+                    if (app.status === 'completed' && app.abaData?.programs) {
+                        // Expande os programas de uma sessão em registros individuais
+                        app.abaData.programs.forEach(progResult => {
+                            completedSessions.push({ ...app, abaData: progResult });
+                        });
+                    }
+                });
+            }
+            setAllSessions(completedSessions.sort((a, b) => new Date(a.dateTimeStart) - new Date(b.dateTimeStart)));
+            setLoading(false);
+        });
+        return () => unsubscribe();
+    }, [patient.id]);
+
+    if (loading) return <ActivityIndicator style={{ marginTop: 40 }} size="large" color={ABAETE_COLORS.primaryBlue} />;
+    if (availablePrograms.length === 0) return <View style={styles.contentAreaClean}><Text style={styles.pageTitleClean}>Meu Progresso</Text><Text style={styles.emptySectionText}>Nenhum programa atribuído.</Text></View>;
+
+    const programConfig = patient.assignedPrograms?.[selectedProgramId];
+    const filteredSessions = allSessions.filter(session => session.abaData.programId === selectedProgramId);
+    
+    const generalChartData = filteredSessions.map(session => ({
+        value: session.abaData.accuracy,
+        label: new Date(session.dateTimeStart).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+        phase: session.abaData.phaseConducted,
+    }));
+
+    return (
+        <ScrollView style={styles.contentAreaClean}>
+            <Text style={styles.pageTitleClean}>Meu Progresso</Text>
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Analisar Programa</Text>
+                <View style={styles.pickerContainer}>
+                    <Picker selectedValue={selectedProgramId} onValueChange={itemValue => setSelectedProgramId(itemValue)}>
+                        {availablePrograms.map(prog => <Picker.Item key={prog.id} label={prog.name} value={prog.id} />)}
+                    </Picker>
+                </View>
+            </View>
+
+            <View style={styles.chartSection}>
+                <Text style={styles.sectionTitle}>Progresso Geral</Text>
+                <View style={styles.chartContainer}><ProgressChart chartData={generalChartData} /></View>
+            </View>
+
+            {programConfig?.targets?.map(targetName => {
+                const targetChartData = filteredSessions.map(session => {
+                    const trial = session.abaData.trialsData.find(t => t.target === targetName);
+                    if (!trial?.attempts?.length) return null;
+                    const correct = trial.attempts.filter(a => a.score === 1).length;
+                    return {
+                        value: (correct / trial.attempts.length) * 100,
+                        label: new Date(session.dateTimeStart).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+                        phase: session.abaData.phaseConducted,
+                    };
+                }).filter(Boolean);
+
+                return (
+                    <View key={targetName} style={styles.chartSection}>
+                        <Text style={styles.sectionTitle}>{`Alvo: "${targetName}"`}</Text>
+                        <View style={styles.chartContainer}><ProgressChart chartData={targetChartData} /></View>
+                    </View>
+                );
+            })}
+        </ScrollView>
     );
 };
 
@@ -207,6 +378,8 @@ const PostItem = ({ post, currentUserId }) => {
     const [commentsVisible, setCommentsVisible] = useState(false);
     const [comments, setComments] = useState([]);
     const [commentText, setCommentText] = useState('');
+    const [isImageModalVisible, setImageModalVisible] = useState(false);
+    const [selectedImageUri, setSelectedImageUri] = useState(null);
 
     useEffect(() => {
         let isMounted = true;
@@ -234,6 +407,11 @@ const PostItem = ({ post, currentUserId }) => {
         }
     }, [commentsVisible, post.id, post.patientId]);
 
+    const openImageModal = (uri) => {
+        setSelectedImageUri(uri);
+        setImageModalVisible(true);
+    };
+
     const handleToggleLike = async () => {
         if (!currentUserId) return;
         const likeRef = ref(FIREBASE_DB, `patientFeeds/${post.patientId}/${post.id}/likes/${currentUserId}`);
@@ -260,6 +438,18 @@ const PostItem = ({ post, currentUserId }) => {
         <View style={styles.postCard}>
             <View style={styles.postHeader}><Image source={{ uri: author.profilePicture || `https://ui-avatars.com/api/?name=${authorName.replace(' ', '+')}` }} style={styles.postAvatar} /><View><Text style={styles.postAuthorName}>{authorName}</Text><Text style={styles.postTimestamp}>{timeAgo(post.createdAt)}</Text></View></View>
             <Text style={styles.postText}>{post.text}</Text>
+
+            {post.media && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.postMediaContainer}>
+                    {Object.values(post.media).map((mediaFile, index) => (
+                        <TouchableOpacity key={index} onPress={() => mediaFile.type === 'image' && openImageModal(mediaFile.url)}>
+                            {mediaFile.type === 'image' ? <Image source={{ uri: mediaFile.url }} style={styles.mediaItem} />
+                            : mediaFile.type === 'video' ? <Video source={{ uri: mediaFile.url }} style={styles.mediaItem} useNativeControls resizeMode="cover" />
+                            : null}
+                        </TouchableOpacity>
+                    ))}
+                </ScrollView>
+            )}
             
             <View style={styles.postActions}>
                 <TouchableOpacity style={styles.actionButton} onPress={handleToggleLike}><MaterialIcons name={isLiked ? "thumb-up" : "thumb-up-off-alt"} size={22} color={isLiked ? ABAETE_COLORS.primaryBlue : ABAETE_COLORS.textSecondary} /><Text style={[styles.actionButtonText, isLiked && styles.actionButtonLiked]}>{likesCount > 0 ? likesCount : ''} Curtir</Text></TouchableOpacity>
@@ -280,6 +470,15 @@ const PostItem = ({ post, currentUserId }) => {
                     </View>
                 </View>
             )}
+
+            <Modal visible={isImageModalVisible} transparent={true} onRequestClose={() => setImageModalVisible(false)}>
+                <View style={styles.imageModalContainer}>
+                    <TouchableOpacity style={styles.closeModalButton} onPress={() => setImageModalVisible(false)}>
+                        <MaterialIcons name="close" size={28} color="white" />
+                    </TouchableOpacity>
+                    <Image source={{ uri: selectedImageUri }} style={styles.imageModalContent} resizeMode="contain" />
+                </View>
+            </Modal>
         </View>
     );
 };
@@ -319,15 +518,102 @@ const FeedContent = ({ patientId, currentUserId }) => {
   );
 };
 
-const PerfilContent = ({ patient, onLogout }) => (
-  <ScrollView style={styles.contentScrollViewClean} contentContainerStyle={styles.contentContainerClean}>
-    <View style={styles.profileHeaderClean}><Image source={{ uri: patient.profilePicture || `https://ui-avatars.com/api/?name=${(patient.displayName || 'P').replace(' ', '+')}` }} style={styles.profileImageClean} /><Text style={styles.profileNameClean}>{patient.displayName}</Text><Text style={styles.profileEmailClean}>{patient.email}</Text></View>
-    {[ {label: 'Meus Dados', icon: 'person', action: () => {}}, {label: 'Responsáveis', icon: 'family-restroom', action: () => {}}, {label: 'Configurações', icon: 'settings', action: () => {}}, {label: 'Ajuda', icon: 'help-outline', action: () => {}} ].map(item => (
-        <TouchableOpacity key={item.label} style={styles.profileMenuItemClean} onPress={item.action}><MaterialIcons name={item.icon} size={24} color={ABAETE_COLORS.secondaryBlue} style={styles.profileMenuIcon} /><Text style={styles.profileMenuItemTextClean}>{item.label}</Text><MaterialIcons name="chevron-right" size={24} color={ABAETE_COLORS.mediumGray} /></TouchableOpacity>
-    ))}
-    <TouchableOpacity style={[styles.profileMenuItemClean, { marginTop: 20 }]} onPress={onLogout}><MaterialIcons name="logout" size={24} color={ABAETE_COLORS.errorRed} style={styles.profileMenuIcon} /><Text style={[styles.profileMenuItemTextClean, { color: ABAETE_COLORS.errorRed }]}>Sair</Text></TouchableOpacity>
-  </ScrollView>
-);
+const EditPatientModal = ({ visible, onClose, patient, onSave }) => {
+    if (!visible) return null;
+
+    const [formData, setFormData] = useState({ ...patient, responsibles: patient.responsibles || [] });
+    
+    const handleInputChange = (field, value) => setFormData(p => ({ ...p, [field]: value }));
+    
+    const handleResponsibleChange = (index, field, value) => {
+        const updatedResponsibles = [...formData.responsibles];
+        updatedResponsibles[index][field] = value;
+        setFormData(p => ({ ...p, responsibles: updatedResponsibles }));
+    };
+    
+    const addResponsible = () => setFormData(p => ({ ...p, responsibles: [...p.responsibles, {}] }));
+    const removeResponsible = (index) => setFormData(p => ({ ...p, responsibles: p.responsibles.filter((_, i) => i !== index) }));
+
+    return (
+        <Modal animationType="slide" visible={visible} onRequestClose={onClose}>
+            <SafeAreaView style={styles.safeAreaClean}>
+                <View style={[styles.headerClean, { justifyContent: 'space-between' }]}>
+                    <Text style={styles.pageTitleClean}>Editar Dados</Text>
+                    <TouchableOpacity onPress={onClose}><MaterialIcons name="close" size={28} /></TouchableOpacity>
+                </View>
+                <ScrollView contentContainerStyle={styles.contentContainerClean}>
+                    <Text style={styles.sectionTitle}>Dados Pessoais</Text>
+                    <TextInput style={styles.input} value={formData.fullName} onChangeText={v => handleInputChange('fullName', v)} placeholder="Nome Completo" />
+                    <TextInput style={styles.input} value={formData.displayName} onChangeText={v => handleInputChange('displayName', v)} placeholder="Nome Social" />
+                    <TextInput style={styles.input} value={formData.birthday} onChangeText={v => handleInputChange('birthday', v)} placeholder="Data de Nascimento (AAAA-MM-DD)" />
+                    <TextInput style={styles.input} value={formData.cpf} onChangeText={v => handleInputChange('cpf', v)} placeholder="CPF" keyboardType="numeric" />
+                    <View style={styles.pickerContainer}>
+                      <Picker selectedValue={formData.gender} onValueChange={v => handleInputChange('gender', v)}>
+                          <Picker.Item label="Prefiro não informar" value="prefer_not_say" />
+                          <Picker.Item label="Masculino" value="male" />
+                          <Picker.Item label="Feminino" value="female" />
+                          <Picker.Item label="Outro" value="other" />
+                      </Picker>
+                    </View>
+
+                    <Text style={styles.sectionTitle}>Responsáveis</Text>
+                    {formData.responsibles.map((resp, index) => (
+                        <View key={index} style={styles.responsibleCard}>
+                            <TouchableOpacity style={styles.removeResponsibleBtn} onPress={() => removeResponsible(index)}>
+                                <MaterialIcons name="delete-outline" size={24} color={ABAETE_COLORS.errorRed} />
+                            </TouchableOpacity>
+                            <TextInput style={styles.input} value={resp.fullName} onChangeText={v => handleResponsibleChange(index, 'fullName', v)} placeholder="Nome do Responsável" />
+                            <TextInput style={styles.input} value={resp.relationship} onChangeText={v => handleResponsibleChange(index, 'relationship', v)} placeholder="Parentesco" />
+                        </View>
+                    ))}
+                    <TouchableOpacity style={styles.addButton} onPress={addResponsible}>
+                        <MaterialIcons name="add" size={20} color={ABAETE_COLORS.primaryBlue} />
+                        <Text style={styles.addButtonText}>Adicionar Responsável</Text>
+                    </TouchableOpacity>
+                </ScrollView>
+                <View style={styles.modalFooter}>
+                    <TouchableOpacity style={styles.saveButton} onPress={() => onSave(formData)}>
+                        <Text style={styles.saveButtonText}>Salvar Alterações</Text>
+                    </TouchableOpacity>
+                </View>
+            </SafeAreaView>
+        </Modal>
+    );
+};
+
+const PerfilContent = ({ patient, onLogout }) => {
+    const [isEditModalVisible, setEditModalVisible] = useState(false);
+
+    const handleSaveProfile = async (updatedData) => {
+        try {
+            await update(ref(FIREBASE_DB, `users/${patient.id}`), updatedData);
+            setEditModalVisible(false);
+            Alert.alert("Sucesso", "Seus dados foram atualizados.");
+        } catch (error) { Alert.alert("Erro", "Não foi possível salvar."); }
+    };
+
+    return (
+        <ScrollView style={styles.contentScrollViewClean} contentContainerStyle={styles.contentContainerClean}>
+            <View style={styles.profileHeaderClean}><Image source={{ uri: patient.profilePicture || `https://ui-avatars.com/api/?name=${(patient.displayName || 'P').replace(' ', '+')}` }} style={styles.profileImageClean} /><Text style={styles.profileNameClean}>{patient.displayName}</Text><Text style={styles.profileEmailClean}>{patient.email}</Text></View>
+            <TouchableOpacity style={styles.profileMenuItemClean} onPress={() => setEditModalVisible(true)}>
+                <MaterialIcons name="person" size={24} color={ABAETE_COLORS.secondaryBlue} style={styles.profileMenuIcon} />
+                <Text style={styles.profileMenuItemTextClean}>Meus Dados e Responsáveis</Text>
+                <MaterialIcons name="chevron-right" size={24} color={ABAETE_COLORS.mediumGray} />
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.profileMenuItemClean, { marginTop: 20 }]} onPress={onLogout}>
+                <MaterialIcons name="logout" size={24} color={ABAETE_COLORS.errorRed} style={styles.profileMenuIcon} />
+                <Text style={[styles.profileMenuItemTextClean, { color: ABAETE_COLORS.errorRed }]}>Sair</Text>
+            </TouchableOpacity>
+
+            <EditPatientModal 
+                visible={isEditModalVisible} 
+                onClose={() => setEditModalVisible(false)} 
+                patient={patient} 
+                onSave={handleSaveProfile} 
+            />
+        </ScrollView>
+    );
+};
 
 // --- COMPONENTE PRINCIPAL ---
 export const HomeScreen = ({ navigation }) => {
@@ -523,5 +809,43 @@ const styles = StyleSheet.create({
     commentText: {
         fontFamily: FONT_FAMILY.Regular,
         color: ABAETE_COLORS.textSecondary,
+    },
+    // Estilos para os Gráficos em Progresso
+    pickerContainer: { borderWidth: 1, borderColor: ABAETE_COLORS.lightGray, borderRadius: 8, marginBottom: 10, backgroundColor: ABAETE_COLORS.white },
+    chartSection: { backgroundColor: ABAETE_COLORS.white, borderRadius: 12, paddingVertical: 16, paddingHorizontal: 8, marginTop: 16, borderWidth: 1, borderColor: ABAETE_COLORS.lightGray },
+    chartContainer: { height: 280, justifyContent: 'center', paddingTop: 20 },
+    emptyChartContainer: { height: 220, alignItems: 'center', justifyContent: 'center', padding: 20 },
+    
+    // Estilos para a Mídia no Feed
+    postMediaContainer: { marginTop: 10, marginBottom: 10, height: 200 },
+    mediaItem: { width: 280, height: 200, borderRadius: 8, marginRight: 10, backgroundColor: '#e9ecef' },
+    imageModalContainer: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.85)', justifyContent: 'center', alignItems: 'center' },
+    imageModalContent: { width: '100%', height: '80%' },
+    closeModalButton: { position: 'absolute', top: 60, right: 20, zIndex: 1, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20, padding: 8 },
+    input: {
+      height: 50, borderColor: ABAETE_COLORS.lightGray, borderWidth: 1, borderRadius: 8,
+      paddingHorizontal: 15, marginBottom: 15, fontFamily: FONT_FAMILY.Regular, fontSize: 16,
+    },
+    modalFooter: {
+      padding: 20, borderTopWidth: 1, borderTopColor: ABAETE_COLORS.lightGray,
+    },
+    saveButton: {
+      backgroundColor: ABAETE_COLORS.primaryBlue, padding: 15, borderRadius: 8, alignItems: 'center',
+    },
+    saveButtonText: {
+      color: '#fff', fontFamily: FONT_FAMILY.SemiBold, fontSize: 16,
+    },
+    responsibleCard: {
+      padding: 15, borderWidth: 1, borderColor: ABAETE_COLORS.lightGray, borderRadius: 12, marginBottom: 15,
+    },
+    removeResponsibleBtn: {
+      position: 'absolute', top: 10, right: 10,
+    },
+    addButton: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      padding: 15, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: ABAETE_COLORS.primaryBlue,
+    },
+    addButtonText: {
+      color: ABAETE_COLORS.primaryBlue, fontFamily: FONT_FAMILY.SemiBold, marginLeft: 8,
     },
 });
