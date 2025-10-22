@@ -26,6 +26,7 @@ import { FIREBASE_AUTH, FIREBASE_DB } from '../services/firebaseConnection';
 import { ABAETE_COLORS } from '../constants/Colors';
 import { FONT_FAMILY } from '../constants/Fonts';
 import { getCachedUserData } from '../services/userCache';
+import { AnamneseCard } from '../components/AnamneseCard';
 
 // --- CONFIGURAÇÕES E FUNÇÕES AUXILIARES ---
 
@@ -340,36 +341,57 @@ const ProgressoContent = ({ patient }) => {
     );
 };
 
-const TarefasContent = ({ patientId }) => {
+const TarefasContent = ({ patient, navigation }) => {
     const [tasks, setTasks] = useState([]);
+    const [hasAnamnese, setHasAnamnese] = useState(true); // Começa como true para não piscar
     const [loading, setLoading] = useState(true);
+
     useEffect(() => {
-        const tasksRef = query(ref(FIREBASE_DB, 'homeworkTasks'), orderByChild('patientId'), equalTo(patientId));
-        const unsubscribe = onValue(tasksRef, snapshot => {
+        if (!patient?.id) return;
+        
+        // Verifica se a anamnese existe
+        const anamneseRef = ref(FIREBASE_DB, `anamnesis/${patient.id}`);
+        const unsubscribeAnamnese = onValue(anamneseRef, (snapshot) => {
+            setHasAnamnese(snapshot.exists());
+        });
+
+        // Busca as tarefas de casa
+        const tasksRef = query(ref(FIREBASE_DB, 'homeworkTasks'), orderByChild('patientId'), equalTo(patient.id));
+        const unsubscribeTasks = onValue(tasksRef, snapshot => {
             const allTasks = [];
             snapshot.forEach(child => allTasks.push({ id: child.key, ...child.val() }));
             setTasks(allTasks.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)));
             setLoading(false);
         });
-        return () => unsubscribe();
-    }, [patientId]);
+        
+        return () => { unsubscribeAnamnese(); unsubscribeTasks(); };
+    }, [patient?.id]);
     
     if(loading) return <ActivityIndicator/>;
     
     return (
-        <View style={styles.contentAreaClean}>
+        <ScrollView style={styles.contentAreaClean} contentContainerStyle={styles.contentContainerClean}>
             <Text style={styles.pageTitleClean}>Tarefas de Casa</Text>
-            <FlatList data={tasks} keyExtractor={item => item.id}
-                renderItem={({item}) => (
-                    <TouchableOpacity style={styles.taskListItem}>
-                        <View style={[styles.listItemIconContainer, item.status === 'pending_responsible' ? {backgroundColor: ABAETE_COLORS.yellowOpaco} : {backgroundColor: '#E8F5E9'}]}><MaterialIcons name={item.status === 'pending_responsible' ? "pending-actions" : "check-circle-outline"} size={24} color={item.status === 'pending_responsible' ? ABAETE_COLORS.yellowDark : ABAETE_COLORS.successGreen} /></View>
-                        <View style={styles.listItemTextContainer}><Text style={styles.listItemTitle}>{item.title}</Text><Text style={styles.listItemSubtitle}>Prazo: {new Date(item.dueDate).toLocaleDateString('pt-BR')}</Text></View>
-                        <MaterialIcons name="chevron-right" size={24} color={ABAETE_COLORS.mediumGray} />
-                    </TouchableOpacity>
+            
+            {!hasAnamnese && (
+                <AnamneseCard onPress={() => navigation.navigate('Anamnese', { patient })} />
+            )}
+            
+            <View style={styles.sectionContainer}>
+                <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Atividades Pendentes</Text></View>
+                {tasks.length > 0 ? (
+                    <FlatList data={tasks} keyExtractor={item => item.id} scrollEnabled={false}
+                        renderItem={({item}) => (
+                            <TouchableOpacity style={styles.taskListItem}>
+                                {/* ... seu item de tarefa ... */}
+                            </TouchableOpacity>
+                        )}
+                    />
+                ) : (
+                    <Text style={styles.emptySectionText}>Nenhuma tarefa de casa encontrada.</Text>
                 )}
-                ListEmptyComponent={<Text style={styles.emptySectionText}>Nenhuma tarefa encontrada.</Text>}
-            />
-        </View>
+            </View>
+        </ScrollView>
     );
 };
 
@@ -651,7 +673,7 @@ export const HomeScreen = ({ navigation }) => {
       case 'Home': return <HomeContent navigation={navigation} patient={patient} />;
       case 'Agenda': return <AgendaContent patientId={patient.id} />;
       case 'Progresso': return <ProgressoContent patient={patient} />;
-      case 'Tarefas': return <TarefasContent patientId={patient.id} />;
+      case 'Tarefas': return <TarefasContent patient={patient} navigation={navigation} />;
       case 'Feed': return <FeedContent patientId={patient.id} currentUserId={FIREBASE_AUTH.currentUser?.uid} />;
       case 'Perfil': return <PerfilContent patient={patient} onLogout={handleLogout} />;
       default: return <HomeContent navigation={navigation} patient={patient} />;

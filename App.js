@@ -13,6 +13,7 @@ import { ProgramEditorScreen } from './src/screens/ProgramEditorScreen';
 import { NewAbaScreen } from './src/screens/NewAbaScreen';
 import { CalendarScreen } from './src/screens/CalendarScreen';
 import { PatientDetailScreen } from './src/screens/PatientDetailScreen';
+import { AnamneseScreen } from './src/screens/AnamneseScreen';
 
 const Stack = createStackNavigator();
 
@@ -50,6 +51,7 @@ export default function App() {
         <Stack.Screen name="NewAba" component={NewAbaScreen} />
         <Stack.Screen name="Calendar" component={CalendarScreen} />
         <Stack.Screen name="PatientDetail" component={PatientDetailScreen} />
+        <Stack.Screen name="Anamnese" component={AnamneseScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
